@@ -1,5 +1,11 @@
 # dsh-plugin-forge
 
+
+<p align="center">
+  <a href="https://github.com/jonah791/dsh-plugin-forge"><img src="https://img.shields.io/badge/version-0.1.0-blue" alt="version"></a>
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="license">
+  <img src="https://img.shields.io/badge/TypeScript-3178C6" alt="TypeScript">
+</p>
 插件创建插件：声明式 spec → 完整可构建的 DSH 插件项目。工具 DSL 正确性由生成器保证，消除手写 defineTool 的 TS 类型错误与括号配对错误；高自由度（inject/imports/render/任意 execute 逻辑/自定义 Config）。
 
 ## 工具
