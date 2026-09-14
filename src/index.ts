@@ -226,7 +226,13 @@ export function buildPackageJson(spec: ForgeSpec): string {
     license: 'MIT',
     peerDependencies: PACKAGE_DEPS,
     devDependencies: { '@types/node': '^22.0.0', typescript: '^5.9.3' },
-    scripts: { build: 'tsc -p tsconfig.json', typecheck: 'tsc -p tsconfig.json --noEmit' },
+    scripts: {
+      build: 'tsc -p tsconfig.json',
+      // 2026-09-14：生成物必须自带可跑的回归检查（否则每个新插件都从「无测试」起步，
+      // 生态级可维护性缺口 S3 的根因就在模板）。配套生成 tests/smoke.test.mjs。
+      test: 'node --test "tests/*.test.mjs"',
+      typecheck: 'tsc -p tsconfig.json --noEmit',
+    },
   }
   return JSON.stringify(pkg, null, 2) + '\n'
 }
@@ -278,8 +284,176 @@ export function buildReadme(spec: ForgeSpec): string {
   return lines.join('\n')
 }
 
-// ════════════════════════ 工具 ════════════════════════
+/** 生成 docs/semantic.md 骨架（10 节；2026-09-14：新能力开工前先落语义文档——AGENTS.md §5.20） */
+export function buildSemanticDoc(spec: ForgeSpec): string {
+  const id = pluginId(spec.name)
+  const toolLines = (spec.tools ?? []).length > 0
+    ? (spec.tools ?? []).map((t) => '- `' + t.name + '`：' + t.description).join('\n')
+    : '- （暂无工具：本插件是 Service/事件型，或尚未实现）'
+  return [
+    '# ' + spec.name + ' · 语义文档',
+    '',
+    '> 元信息：版本 v0.1 · 状态 draft · 最近复核 ' + new Date().toISOString().slice(0, 10) + ' · owner ' + id,
+    '',
+    '## 1 · 定位与反定位',
+    '',
+    '**是什么**：' + spec.description,
+    '',
+    '**不是什么**：<TODO 写清边界——本插件不负责什么，避免被误当成万能工具>',
+    '',
+    '## 2 · 术语表',
+    '',
+    '| 术语 | 含义 |',
+    '|------|------|',
+    '| <TODO> | <TODO> |',
+    '',
+    '## 3 · 概念模型与不变量',
+    '',
+    '<TODO 画清核心对象与它们的关系>',
+    '',
+    '不变量（必须永远为真）：',
+    '1. <TODO 例如「观测失败不反噬主流程：观测函数一律吞错并返回 bool」>',
+    '',
+    '## 4 · 契约',
+    '',
+    '### 4.1 配置（Config schema）',
+    '',
+    '<TODO 逐字段：名 / 类型 / 默认值 / 语义>',
+    '',
+    '### 4.2 工具面',
+    '',
+    toolLines,
+    '',
+    '### 4.3 调用点清单 [MUST]',
+    '',
+    '| 调用点 | 位置 | 说明 |',
+    '|--------|------|------|',
+    '| <TODO 谁调用本插件的能力、本插件调用谁> | <文件:行> | <TODO> |',
+    '',
+    '## 5 · 边界与信任',
+    '',
+    '<TODO 输入信任级别 / 沙箱边界 / 凭据与隐私 / 能力边界诚实声明（capability ≠ 沙箱）>',
+    '',
+    '## 6 · 与既有机制的关系',
+    '',
+    '<TODO 与宿主/其他插件/官方能力的重叠与分工>',
+    '',
+    '## 7 · 可证伪验收清单',
+    '',
+    '| # | 可证伪命题 | 证据（命令/单测名/日志行） | 状态 |',
+    '|---|-----------|--------------------------|------|',
+    '| A1 | 冒烟测试通过 | `npm test` → 全绿 | 待验收 |',
+    '| A2 | <TODO 一条能被一次测量判真假的命题> | <TODO> | 待验收 |',
+    '',
+    '## 8 · 与实现的关系',
+    '',
+    '- 主实现：`src/index.ts`；测试：`tests/smoke.test.mjs`（生成器自带的骨架守卫）。',
+    '- 同语义副本：无。',
+    '',
+    '## 9 · 实践修订记录',
+    '',
+    '- **' + new Date().toISOString().slice(0, 10) + ' 首次生成**：由 `dsh-plugin-forge` 生成骨架——本节的每一次语义修正都追加在下方，不回改历史。',
+    '',
+    '## 10 · 未决问题',
+    '',
+    '- **U1 <TODO>**：<TODO 现有设计的已知缺口 / 待决方案>',
+    '',
+  ].join('\n')
+}
 
+/** 生成 tests/smoke.test.mjs（骨架守卫：不依赖 lib/ 构建产物，生成后 `npm test` 立刻可跑） */
+export function buildSmokeTest(spec: ForgeSpec): string {
+  const lines = [
+    '/**',
+    ' * 骨架冒烟测试（由 dsh-plugin-forge 生成，2026-09-14）。',
+    ' * 只断言结构、不依赖构建产物——`npm test` 在生成后立刻可跑；',
+    ' * 业务逻辑测试请另加 tests/<主题>.test.mjs（跑 lib/ 产物，与运行时同源）。',
+    ' */',
+    "import { test } from 'node:test'",
+    "import assert from 'node:assert/strict'",
+    "import { readFileSync, existsSync } from 'node:fs'",
+    "import { join, dirname } from 'node:path'",
+    "import { fileURLToPath } from 'node:url'",
+    '',
+    "const root = join(dirname(fileURLToPath(import.meta.url)), '..')",
+    '',
+    "test('package.json 可解析且暴露 build/test 脚本', () => {",
+    "  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))",
+    '  assert.equal(pkg.name, ' + JSON.stringify(spec.name) + ')',
+    "  assert.equal(pkg.type, 'module')",
+    "  assert.equal(pkg.main, 'lib/index.js')",
+    "  assert.ok(pkg.scripts.build, '必须有 build 脚本')",
+    "  assert.ok(pkg.scripts.test, '必须有 test 脚本（回归能力）')",
+    '})',
+    '',
+    "test('src/index.ts 暴露 name / inject / apply', () => {",
+    "  const src = readFileSync(join(root, 'src', 'index.ts'), 'utf8')",
+    "  assert.ok(src.includes('export const name = '), '必须导出 name')",
+    "  assert.ok(src.includes('export const inject = '), '必须导出 inject')",
+    "  assert.ok(src.includes('export function apply('), '必须导出 apply')",
+    '})',
+    '',
+    "test('tsconfig.json 是 ESM/NodeNext 配置', () => {",
+    "  const ts = JSON.parse(readFileSync(join(root, 'tsconfig.json'), 'utf8'))",
+    "  assert.equal(ts.compilerOptions.module, 'NodeNext')",
+    "  assert.equal(ts.compilerOptions.outDir, 'lib')",
+    '})',
+    '',
+    "test('语义文档存在（新能力开工前先落文档）', () => {",
+    "  assert.ok(existsSync(join(root, 'docs', 'semantic.md')), '缺 docs/semantic.md')",
+    '})',
+    '',
+    "test('cordis.patch.yml 含组合行 id', () => {",
+    "  const yml = readFileSync(join(root, 'cordis.patch.yml'), 'utf8')",
+    '  assert.ok(yml.includes(' + JSON.stringify(pluginId(spec.name)) + '))',
+    '})',
+    '',
+  ]
+  return lines.join('\n')
+}
+
+/** 生成物清单（纯函数：让「模板必须产出哪些文件」成为可断言的不变量） */
+export function buildFiles(spec: ForgeSpec): Record<string, string> {
+  return {
+    'src/index.ts': buildSource(spec),
+    'package.json': buildPackageJson(spec),
+    'tsconfig.json': buildTsconfig(),
+    'cordis.patch.yml': buildPatch(spec),
+    'README.md': buildReadme(spec),
+    'docs/semantic.md': buildSemanticDoc(spec),
+    'tests/smoke.test.mjs': buildSmokeTest(spec),
+  }
+}
+
+/** spec 归一（原 execute 内联逻辑抽出：校验名 + 补 dsh- 前缀 + 有工具则强制 inject tools） */
+export interface ForgeArgs {
+  name: string
+  description: string
+  inject?: string[]
+  imports?: string[]
+  config?: Record<string, unknown>
+  tools?: Array<Record<string, unknown>>
+}
+
+export function normalizeSpec(args: ForgeArgs): { ok: true; spec: ForgeSpec } | { ok: false; error: string } {
+  const raw = args.name
+  if (!/^[a-z][a-z0-9-]*$/.test(raw.replace(/^dsh-/, ''))) return { ok: false, error: '插件名须为小写字母开头，仅 [a-z0-9-]' }
+  const name = raw.startsWith('dsh-') ? raw : 'dsh-' + raw
+  const spec: ForgeSpec = {
+    name,
+    description: args.description,
+    inject: args.inject,
+    imports: args.imports,
+    config: args.config as Record<string, ConfigFieldSpec> | undefined,
+    tools: args.tools as ToolSpec[] | undefined,
+  }
+  if ((args.tools ?? []).length > 0 && !(spec.inject ?? []).includes('tools')) {
+    spec.inject = ['tools', ...(spec.inject ?? [])]
+  }
+  return { ok: true, spec }
+}
+
+// ════════════════════════ 工具 ════════════════════════
 export function apply(ctx: Context, config: Config): void {
   const logger = ctx.logger('plugin-forge')
   const require = createRequire(import.meta.url)
@@ -330,33 +504,20 @@ export function apply(ctx: Context, config: Config): void {
       build: { type: 'boolean', description: '生成后自动 tsc 构建验证（默认 true）' },
     },
     output: { schema: { type: 'object', additionalProperties: false, properties: { ok: { type: 'boolean', required: true }, dir: { type: 'string' }, built: { type: 'boolean' }, files: { type: 'array' }, error: { type: 'string' }, buildOutput: { type: 'string' } } }, render: (_a: unknown, v: any) => [{ type: 'text', text: v.ok ? '插件已生成 ' + (v.dir ?? '') + ' built=' + String(v.built) : '生成失败：' + (v.error ?? '') }] },
-    async execute(args: { name: string; description: string; inject?: string[]; imports?: string[]; config?: Record<string, unknown>; tools?: Array<Record<string, unknown>>; build?: boolean }) {
-      const raw = args.name
-      if (!/^[a-z][a-z0-9-]*$/.test(raw.replace(/^dsh-/, ''))) return { ok: false, error: '插件名须为小写字母开头，仅 [a-z0-9-]' }
-      const name = raw.startsWith('dsh-') ? raw : 'dsh-' + raw
-      const spec: ForgeSpec = {
-        name,
-        description: args.description,
-        inject: args.inject,
-        imports: args.imports,
-        config: args.config as Record<string, ConfigFieldSpec> | undefined,
-        tools: args.tools as ToolSpec[] | undefined,
-      }
-      if ((args.tools ?? []).length > 0 && !(spec.inject ?? []).includes('tools')) {
-        spec.inject = ['tools', ...(spec.inject ?? [])]
-      }
+    async execute(args: ForgeArgs & { build?: boolean }) {
+      const norm = normalizeSpec(args)
+      if (!norm.ok) return { ok: false, error: norm.error }
+      const spec = norm.spec
+      const name = spec.name
       const dir = join(selfPluginsDir, name)
       if (existsSync(dir)) return { ok: false, error: '目录已存在: ' + dir }
       try {
-        mkdirSync(join(dir, 'src'), { recursive: true })
-        const files: Record<string, string> = {
-          'src/index.ts': buildSource(spec),
-          'package.json': buildPackageJson(spec),
-          'tsconfig.json': buildTsconfig(),
-          'cordis.patch.yml': buildPatch(spec),
-          'README.md': buildReadme(spec),
+        const files = buildFiles(spec)
+        for (const [f, content] of Object.entries(files)) {
+          const abs = join(dir, f)
+          mkdirSync(dirname(abs), { recursive: true })
+          writeFileSync(abs, content, 'utf8')
         }
-        for (const [f, content] of Object.entries(files)) writeFileSync(join(dir, f), content, 'utf8')
         let built = false
         let buildOutput = ''
         if (args.build !== false) {

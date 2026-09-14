@@ -136,6 +136,11 @@
 | A7 | `pluginId` 约定稳定 | `node -e "import('…/lib/index.js').then(m=>console.log(m.pluginId('dsh-x-y')))"` → `agent-x-y` | 待验收 |
 | A8 | 生成器是纯函数（无 IO） | 对同一 spec 调 `buildSource` 两次结果字符串相等；`src/index.ts` 中这些函数体内无 `fs` 调用 | 已实测（源码审读）／待单测 |
 | A9 | 改了代码后确实生效 | 见下方「生效判据」第 ①② 条 | 待验收 |
+| A10 | 回归能力存在且绿 | `npm test`（= `node --test "tests/*.test.mjs"`，跑 `lib/` 产物）→ **21 pass / 0 fail** | ✅ 2026-09-14 |
+| A11 | `pluginId` 约定（A7 的离线版） | `tests/forge.test.mjs`「pluginId: 去 dsh- 前缀换 agent- 前缀」 | ✅ 2026-09-14 |
+| A12 | 生成器纯函数确定性（A8 的离线版） | 同 spec 两次 `buildSource`/`buildFiles` 结果逐字相等（无 IO、无时钟依赖，除语义文档日期行） | ✅ 2026-09-14 |
+| A13 | **生成物自带可跑回归检查**（模板不变量） | `buildFiles(spec)` 产出清单固定 7 件（含 `docs/semantic.md` + `tests/smoke.test.mjs`）；写出临时目录后 `node --test tests/smoke.test.mjs` → **5 pass** | ✅ 2026-09-14 |
+| A14 | A13 的守卫**非空断言**（尸体测试） | 删掉生成物的 `docs/semantic.md` → 生成物测试转红（退出码 1、报 `缺 docs/semantic.md`） | ✅ 2026-09-14 |
 
 **生效判据（S7）**：改动 `src/index.ts` 后，按序取证——
 ① **产物新**：`lib/index.js` 的 mtime **晚于** web 进程启动时间（仅此一条不足，见 AGENTS.md §5.11 §6）；
@@ -154,9 +159,10 @@
 - 构建产物：`lib/index.js`、`lib/types/index.d.ts`（`tsc -p tsconfig.json`）
 - 同语义副本：无（本文件是唯一主副本）
 - 未实现 / 未验证部分（**显式标注**）：
-  - **无自动化测试**：仓库内没有 `tests/`，`package.json` 也没有 `test` 脚本 → 生成器纯函数的正确性只有源码审读，没有回归网
+  - ~~**无自动化测试**~~ **已补（2026-09-14）**：`tests/forge.test.mjs`（21 用例，含失败路径与尸体测试）。A3–A6/A9 属**接线/构建**行为（真跑 `tsc`、真写盘），仍需真实调用验收。
   - `Config.bin` 字段声明未被读取（死配置）
-  - 生成骨架不含 `docs/semantic.md` / `.gitignore` / 测试脚本
+  - ~~生成骨架不含 `docs/semantic.md` / `.gitignore` / 测试脚本~~ **已改（2026-09-14）**：生成骨架现含 `docs/semantic.md`（10 节骨架）+ `tests/smoke.test.mjs` + `package.json.scripts.test`；仍**不含** `.gitignore`（见 §10 U6）。
+  - 生成物清单的单一真源 = `buildFiles(spec)`（`execute` 只负责写盘，不再内联拼清单）。
 
 ## 9 · 实践修订记录
 
@@ -167,10 +173,20 @@
   - 语义**被修正**：此前无文档，不存在被推翻的旧表述；新记录两处与直觉不符的事实——① `Config.bin` 声明未使用；② 本插件**无单测**，因此 §7 多数条目为「待验收」
   - 教训：生成器类能力的语义核心是「拒绝条件」（何时不生成），而非「生成什么」——先把拒绝条件写清，才能防「半吊子生成」
 
+- **2026-09-14 可维护性补课（批次 W3）：生成器上测试 + 补模板缺口（docs/semantic.md 与 test 脚本）**
+  - 语义**被确认**：`sanitizeRequired` 对对象级 `required` 数组**响亮拒绝**（不静默剥除）；`pluginId('dsh-x')='agent-x'`；`buildSource` 的 `name` 导出是**组合行 id（agent-xxx）而非包名**；`inject` 缺省恒为 `['tools']`（与 spec 是否含 tools 无关），`defineTools` 的 import 跟随 inject，而**工具注册块**跟随 `spec.tools`。
+  - 语义**被补充**：新增四个导出——`normalizeSpec`（原 `execute` 内联的「校验名 + 补前缀 + 有工具则强制 inject tools」抽出）、`buildFiles`（生成物清单 = **单一真源**，7 件）、`buildSemanticDoc`（10 节语义文档骨架）、`buildSmokeTest`（骨架守卫测试）。
+  - 语义**被修正（模板缺口，行为变更）**：生成骨架原先**不含 `docs/semantic.md`、不含 `test` 脚本**——这正是「每个新插件都从 S1/S3 缺口起步」的**根因**（可维护性体检的缺口在源头被持续复制）。现生成物自带：`docs/semantic.md`（必备 10 节，含调用点清单节）+ `tests/smoke.test.mjs`（5 条骨架断言，**不依赖 lib/ 构建产物**，故生成后 `npm test` 立刻可跑）+ `package.json.scripts.test`。`execute` 相应改为「按文件路径逐级 `mkdirSync(dirname(abs))`」，以支持 `docs/`、`tests/` 子目录。
+  - 语义**被修正（测试方法学，非插件缺陷）**：从 `node --test` 内部再 `spawnSync('node', ['--test', ...])` 时，子进程继承 `NODE_TEST_CONTEXT` → node:test 判定「递归调用 run()」并**静默跳过全部文件、以退出码 0 结束（假绿）**。测试须 `delete env.NODE_TEST_CONTEXT`，并额外断言子进程真的跑了 5 条用例（只断 status===0 会漏掉这类假绿）。
+  - 教训：**模板是「缺口复制器」**——一个生成器缺什么，未来每个新插件就缺什么；给生成器写测试时，最该锁住的不是「生成了什么字符串」，而是「生成物本身能不能通过体检」（本次：生成物自带可跑测试 + 尸体测试证明删件即红）。
+
 ## 10 · 未决问题
 
 - **U1 `Config.bin` 是死字段**：schema 里声明但 `apply` 未读。倾向：删除声明（或让它真的参与 `execFile` 的启动器选择）。需实现者裁决。
 - **U2 生成物缺语义文档**：与 AGENTS.md §5.20「新能力开工前先落 `docs/semantic.md`」冲突。倾向：`buildSource` 同级增加 `docs/semantic.md` 草稿（引用 `docs/semantics/templates/semantic.md`）——但**应先裁决**「生成器该不该替人写文档」，避免生成空壳模板。
-- **U3 无自证轨迹**：生成过什么插件、哪次 `built=false`，只存在于会话日志。倾向：落 `<DSH_HOME>/plugin-forge-trace.jsonl`（一行一次 `{atMs, name, dir, built, tscMs}`），符合 §5.22「机制必须自证」。
+  → **已裁决并实现（2026-09-14）**：生成器**替人写骨架**（10 节 + 每节 TODO，状态标 `draft`），人只填空不改结构。裁决依据：D4（缺节）正是骨架能一次性解决的部分，而「填内容」才是人的判断面——空壳风险由「必备节齐全 + 状态 draft」控制，且生成物自带冒烟测试会立刻检查它存在。
 - **U4 生成器无回归网**：纯函数已 `export` 就是在等单测；是否补 `tests/forge.test.mjs`（node --test 直测 lib 产物）由实现者定。
+  → **已闭环（2026-09-14）**：`tests/forge.test.mjs` 21 用例（正常 + 失败/退化 + 两条尸体测试），A10–A14 全绿。
+- **U3 无自证轨迹**：生成过什么插件、哪次 `built=false`，只存在于会话日志。倾向：落 `<DSH_HOME>/plugin-forge-trace.jsonl`（一行一次 `{atMs, name, dir, built, tscMs}`），符合 §5.22「机制必须自证」。
 - **U5 失败时的半写目录**：写盘中途失败会留半成品目录（下次同名生成会被 I1 拒绝）。倾向：写失败即 `rmSync(dir, {recursive:true})` 清理（需裁决「删除是否越界」——本插件自建的目录，倾向可删）。
+- **U6 生成物仍无 `.gitignore` / 无 registry 登记**（本次新增登记）：`node_modules`、`lib` 是否随仓提交由生成物自行决定；`docs/semantics/registry.json`（S2 登记）仍需人工完成。倾向：生成 `.gitignore`（忽略 `node_modules`）；registry 登记保留人工——跨仓库写入不该由生成器代劳。
