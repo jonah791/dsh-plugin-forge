@@ -160,26 +160,33 @@ function buildTool(t: ToolSpec): string {
   const params = (t.parameters ?? {}) as Record<string, unknown>
   const paramsSan = sanitizeRequired(params) as Record<string, ParamSpec>
   const hasParams = Object.keys(paramsSan).length > 0
-  const outSchema = sanitizeRequired(t.outputSchema ?? { type: 'object', additionalProperties: false, properties: { ok: { type: 'boolean', required: true } } })
+  const outSchema = sanitizeRequired(t.outputSchema ?? { type: 'object', additionalProperties: false, properties: { ok: { type: 'boolean', required: true }, text: { type: 'string' } } })
   const schemaJson = JSON.stringify(outSchema)
   const renderExpr = t.render ?? 'JSON.stringify(v)'
   const argsType = hasParams ? 'args: ' + paramsType(paramsSan) : 'args: Record<string, unknown>'
+  // 参数名解构：execute 体里可以直接用 name/seed/... 这些名字（旧版只把 parameters 写进 schema，
+  // 体里引用参数名会报 `Cannot find name 'seed'`——2026-09-17 实测缺陷）
+  const names = Object.keys(paramsSan).filter((n) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(n))
   const lines: string[] = [
     '    ctx.tools.register(defineTool({',
     '      name: ' + JSON.stringify(t.name) + ',',
     '      description: ' + JSON.stringify(t.description) + ',',
-  ]
-  if (hasParams) lines.push('      parameters: ' + JSON.stringify(paramsSan) + ',')
-  lines.push(
+    // parameters 必须恒定存在（缺省时也要 {}），否则 TS 报 Property 'parameters' is missing
+    '      parameters: ' + JSON.stringify(paramsSan) + ',',
     '      output: {',
     '        schema: ' + schemaJson + ',',
     '        render: (_a: unknown, v: any) => [{ type: \'text\', text: ' + renderExpr + ' }],',
     '      },',
     '      async execute(' + argsType + ') {',
-    '        ' + t.execute.trim().replace(/\n/g, '\n        '),
+    ...(names.length ? ['        const { ' + names.join(', ') + ' } = args as any'] : []),
+    '        const __raw = await (async () => {',
+    '          ' + t.execute.trim().replace(/\n/g, '\n          '),
+    '        })()',
+    '        if (__raw && typeof __raw === \'object\' && \'ok\' in (__raw as any)) return __raw as any',
+    '        return { ok: true, text: typeof __raw === \'string\' ? __raw : JSON.stringify(__raw) } as any',
     '      },',
     '    }))',
-  )
+  ]
   return lines.join('\n')
 }
 
