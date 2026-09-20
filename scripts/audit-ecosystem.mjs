@@ -17,10 +17,26 @@
  */
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { collectCtxServices, findInternalImports } from '../lib/index.js'
 
 const ROOT = process.argv[2] ?? 'E:/alice/self-plugins'
 const CORE_EXCLUDE_DIRS = new Set(['node_modules', 'lib', 'dist', '.git', 'docs', 'tests'])
+
+/**
+ * **作者判据（2026-09-20 加，主人纠正后）**：self-plugins 目录里**不全是我的**——`dsh-agent-teams` 是
+ * `github.com/NanmiCoder/...` 的第三方（走 §5.23 依赖流程：不 fork、不改源码、pin + 黑盒验证）。
+ * ⚠ 不要用 `plugin_list` 的分类：它按「是否在 self-plugins 里」归类，会把第三方算成「自研」。
+ * 判据：git remote origin 非 jonah791 ⇒ 第三方；无 git remote 时退回包名 scope 判断。
+ */
+function isThirdParty(dir, pkg) {
+  try {
+    const url = execFileSync('git', ['-C', dir, 'remote', 'get-url', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    if (url) return !/jonah791/i.test(url)
+  } catch { /* 无 git / 无 remote */ }
+  const name = String(pkg.name ?? '')
+  return name.startsWith('@') && !name.startsWith('@jonah791/')
+}
 
 function walk(dir, acc = []) {
   let entries = []
@@ -89,15 +105,19 @@ for (const name of readdirSync(ROOT, { withFileTypes: true }).filter((d) => d.is
   const hasSemantic = existsSync(join(dir, 'docs', 'semantic.md'))
   const hasFabric = existsSync(join(dir, 'dsh-plugin.json'))
 
-  rows.push({ name, version: pkg.version ?? '', shadow, bak, internal, missing, hasTests, hasSemantic, hasFabric, declared })
+  rows.push({ name, version: pkg.version ?? '', third: isThirdParty(dir, pkg), shadow, bak, internal, missing, hasTests, hasSemantic, hasFabric, declared })
 }
 
+const mine = rows.filter((r) => !r.third)
+const theirs = rows.filter((r) => r.third)
 const bad = (r) => r.shadow || r.internal.length > 0 || r.missing.length > 0
 const mark = (b) => (b ? '🔴' : '')
 
-console.log(`# 自研插件生态审计（${ROOT}）· ${rows.length} 个插件 · 判据与 dsh-plugin-forge 同源\n`)
-console.log('## 🔴 需重新设计（有硬判据命中）\n')
-const flagged = rows.filter(bad)
+console.log(`# 自研插件生态审计（${ROOT}）· ${rows.length} 个目录 = 自研 ${mine.length} + 第三方 ${theirs.length} · 判据与 dsh-plugin-forge 同源\n`)
+console.log(`> ⚠ 第三方不算「需重新设计」：它们走 §5.23 依赖流程（不 fork、不改源码、pin + 黑盒验证）。`)
+console.log(`> 第三方：${theirs.map((r) => r.name + '@' + r.version).join(', ') || '（无）'}\n`)
+console.log('## 🔴 需重新设计（**仅自研**，有硬判据命中）\n')
+const flagged = mine.filter(bad)
 if (flagged.length === 0) console.log('（无）')
 for (const r of flagged) {
   const why = []
@@ -106,7 +126,7 @@ for (const r of flagged) {
   if (r.missing.length > 0) why.push('inject 未声明却被使用：' + r.missing.join(', ') + (r.declared ? `（已声明 ${JSON.stringify(r.declared)}）` : '（**无 inject 导出**）'))
   console.log(`- ${r.name}@${r.version} — ${why.join(' ｜ ')}`)
 }
-console.log(`\n小计：${flagged.length} / ${rows.length}`)
+console.log(`\n小计：${flagged.length} / ${mine.length}（自研）`)
 
 const bakOnly = rows.filter((r) => !bad(r) && r.bak.length > 0)
 console.log(`\n## 🟡 死重量（不是缺陷，可清理）`)
