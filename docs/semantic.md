@@ -217,7 +217,7 @@
 | A34 | entrypoint 头部显式标注**两个面** | 单测 `buildFabricEntrypoint: …` 断言正文含 `两个面`（防被读成「能在 Fabric Host 上运行」） | **已实测** |
 | A35 | 生态盘点**不做 `dsh-` 前缀过滤**（分母 = 含 package.json 的全部目录） | 单测 `listPluginDirs`：夹具含 `dsh-a` / `computer-use` / `no-pkg` / `.hidden` / `node_modules` ⇒ 只返回 `['computer-use','dsh-a']`；**线上**：审计器分母 58 → **59**（`computer-use` 曾被静默漏掉） | **已实测** |
 | A36 | 作者判据单一真源（审计器与回填器共用） | 单测 `isThirdPartyRepo` 5 断言（jonah791⇒false / NanmiCoder⇒true / 无 remote 时 `@scope`⇒true、`@jonah791` 与裸名⇒false）；两脚本均 `import ... from '../lib/index.js'`，无本地副本 | **已实测** |
-| A37 | 存量自研插件回填：全部过 `validateFabricSpec`，且各仓 `tsc` exit 0、自身测试仍绿 | `node scripts/backfill-fabric.mjs --dry-run` → `失败 0`；`node scripts/backfill-fabric.mjs` 后逐仓 `tsc -p tsconfig.json` + `node --test`；`node scripts/audit-ecosystem.mjs` 的「缺 dsh-plugin.json」应从 59 降到 1（只剩第三方） | **待验收**（执行中） |
+| A37 | 存量自研插件回填：全部过 `validateFabricSpec`，且各仓 `tsc` exit 0、自身测试仍绿 | `node scripts/backfill-fabric.mjs --dry-run` → `失败 0`；`node scripts/backfill-fabric.mjs` 后逐仓 `tsc -p tsconfig.json` + `node --test`；`node scripts/audit-ecosystem.mjs` 的「缺 dsh-plugin.json」应从 59 降到 1（只剩第三方） | **已实测**（2026-09-20）：回填 **58 成功 / 0 失败 / 1 第三方跳过**；构建 **58/58 exit 0**（其中 2 个需先修 tsconfig 绝对路径：webops TS2688、browser 指向 npx 缓存）；测试 **56 绿 / 1 无 tests / 1 红**（`dsh-agent-cluster` 红因**他人未提交的 `src/index.ts`** DSH 0.1.6 适配，非本次改动——已按 §5.14 不动）；推送 **58/58 `rev-parse == ls-remote`**（49 `main` + 9 `master`）；审计器「缺 dsh-plugin.json」**59 → 1**（仅剩第三方 `dsh-agent-teams`） |
 
 **生效判据（S7）**：改动 `src/index.ts` 后，按序取证——
 ① **产物新**：`lib/index.js` 的 mtime **晚于** web 进程启动时间（仅此一条不足，见 AGENTS.md §5.11 §6）；

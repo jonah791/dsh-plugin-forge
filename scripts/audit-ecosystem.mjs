@@ -133,7 +133,7 @@ console.log(`\n## 🟡 可维护性缺口（非硬错，但属既有体检项）
 console.log(`- 缺 tests/：${noTest.length} 个 → ${noTest.map((r) => r.name).join(', ') || '（无）'}`)
 console.log(`- 缺 docs/semantic.md：${noSem.length} 个 → ${noSem.map((r) => r.name).join(', ') || '（无）'}`)
 console.log(`\n## ⚪ 前瞻项（Fabric 仍是 Draft，不算缺陷）`)
-console.log(`- 缺 dsh-plugin.json：${noFab.length} / ${rows.length}（当前只有 dsh-plugin-forge 具备）`)
+console.log(`- 缺 dsh-plugin.json：${noFab.length} / ${rows.length}${noFab.length ? ' → ' + noFab.map((r) => r.name).join(', ') : '（全覆盖）'}`)
 console.log(`\n## 判据口径`)
 console.log('- 遮蔽 = `node_modules/@deepseek-ai` 是否作为**真实目录副本**存在（junction/symlink 指向宿主共享根则不算；本脚本按名字存在即报，需人工二次确认链接类型）')
 console.log('- inject 对账 = 剔除注释后扫 `ctx.<svc>`，剔除 cordis 内建成员（logger/on/effect…）')
