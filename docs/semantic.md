@@ -190,8 +190,9 @@
 | A21 | 尸体测试：把 `inject` 改空 → 生成物守卫转红 | 单测 `尸体测试：把 inject 改空…`；另一条 `…把内部路径导入写进 src…` | **已实测** |
 | A22 | **junction 套 pnpm 相对 symlink** 的解析失败已修 | 前后对照：`existsSync(@types/node)=false` + `TS2688` ⇒ 改逐条目 junction→realpath 后 `existsSync(index.d.ts)=true` + `BUILD OK` | **已实测**（2026-09-20） |
 | A23 | 双平台测试一致 | Windows `ℹ pass 34 / fail 0` · WSL `# pass 34 / fail 0` | **已实测**（2026-09-20） |
-| A24 | 自证轨迹真的落盘 | `tail -1 <DSH_HOME>/plugin-forge-trace.jsonl` → 含 `{atMs, name, dir, ok, built, files, notes}` 的一行 | **待线上验收**（需重启后真调一次工具） |
-| A25 | 旧版整目录 junction 会被迁移清理 | 在含 junction `node_modules` 的目录上调用 → `buildOutput` 前缀出现「已最小补齐」/不出现旧 junction；`lstatSync(node_modules).isSymbolicLink()` 转 false | **待线上验收** |
+| A24 | 自证轨迹真的落盘 | `tail -1 <DSH_HOME>/plugin-forge-trace.jsonl` → 2026-09-20 重启后真调实测行：`{"atMs":1789873526823,"name":"dsh-forge-smoke","ok":true,"built":true,"files":[…8 项…],"notes":[…2 条…],"buildOutput":"[已最小补齐 node_modules（typescript + @types/*；未链 @deepseek-ai，解析仍走共享根）] "}` | **已实测**（2026-09-20 线上） |
+| A25 | 旧版整目录 junction 会被迁移清理 | —— | **不可达（当前路径）**：`execute` 先写目录再 `prepareBuildEnv`，而 I1 保证该目录此前不存在 ⇒ `node_modules` 必然不存在，分支 ①②（清理旧 junction / 保留真实 node_modules）**进不去**，故**不宣称已验收**。保留为防御性分支，待 `--force` 重生成落地才可达（U8） |
+| A26 | 线上真调：8 件产物 + 依赖只链两样 | 真实 `plugin_forge` 调用后：顶层含 `.gitignore`/`cordis.patch.yml`/`package.json`/`README.md`/`tsconfig.json`/`docs`/`src`/`tests`；`node_modules` 内容 = **仅 `@types, typescript`**；`Test-Path node_modules/@deepseek-ai` = **False**；`lib/index.js` 产出；`notes[]` 2 条（补 `llm` / 未用 `subprocess`） | **已实测**（2026-09-20 线上） |
 
 **生效判据（S7）**：改动 `src/index.ts` 后，按序取证——
 ① **产物新**：`lib/index.js` 的 mtime **晚于** web 进程启动时间（仅此一条不足，见 AGENTS.md §5.11 §6）；
@@ -256,3 +257,5 @@
 - **U3 无自证轨迹**：生成过什么插件、哪次 `built=false`，只存在于会话日志。倾向：落 `<DSH_HOME>/plugin-forge-trace.jsonl`（一行一次 `{atMs, name, dir, built, tscMs}`），符合 §5.22「机制必须自证」。
 - **U5 失败时的半写目录**：写盘中途失败会留半成品目录（下次同名生成会被 I1 拒绝）。倾向：写失败即 `rmSync(dir, {recursive:true})` 清理（需裁决「删除是否越界」——本插件自建的目录，倾向可删）。
 - **U6 生成物仍无 `.gitignore` / 无 registry 登记**（本次新增登记）：`node_modules`、`lib` 是否随仓提交由生成物自行决定；`docs/semantics/registry.json`（S2 登记）仍需人工完成。倾向：生成 `.gitignore`（忽略 `node_modules`）；registry 登记保留人工——跨仓库写入不该由生成器代劳。
+  → **部分闭环（2026-09-20）**：`.gitignore` 已生成（8 件之一，含 `node_modules/` 与 `lib/`）；registry 登记**仍保留人工**，理由不变。
+- **U8 `prepareBuildEnv` 的分支 ①②（清理旧 junction / 保留真实 node_modules）当前不可达**（2026-09-20 识别）：`execute` 的 I1 保证目标目录此前不存在，故 `node_modules` 必然不存在。三个选项：① 删掉这两条分支（最简，但 `--force` 重生成落地时遮蔽风险会回来）；② 抽成可注入 fs 的导出函数并补单测（可测，但要重构 `apply` 闭包）；③ **保留为防御性分支 + 显式标注不可达**（本次选择，代价已在 A25 处如实写明「不宣称已验收」）。倾向：等真要做 `--force` 重生成时一并处置——届时它立刻变成**必须可达且必须测**的路径。
