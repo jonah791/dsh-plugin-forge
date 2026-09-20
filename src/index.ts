@@ -2,7 +2,7 @@
  * dsh-plugin-forge：插件创建插件
  *
  * 把「创建 DSH 插件」从手写 DSL 变成「声明式描述 → 生成完整可构建项目」。
- * 输入 spec（插件名/用途/工具列表/Config 字段/inject/imports），生成 8 件（见 `buildFiles`）。
+ * 输入 spec（插件名/用途/工具列表/Config 字段/inject/imports/fabric），生成 **10 件**（见 `buildFiles`）。
  *
  * 价值：工具 DSL 正确性（parameters 内联 required、output.schema、render）由生成器保证，
  * 消除手写 defineTool 的 TS 类型错误与括号配对错误；高自由度 = 任意 execute 逻辑、额外 import、
@@ -17,13 +17,16 @@
  *    （旧行为会让新插件里的 `pnpm install` **穿透写进 forge 的依赖树**，并可能把 forge 的
  *    `@deepseek-ai` 真实副本复制给每个新插件 ⇒ §5.15.4 的「旧副本遮蔽宿主 link farm」事故）
  *
- * 另：`dshForge` 是**本地静态声明**（不是 Community Fabric manifest——RFC 0001 仍是 Draft、非标准），
- * 由生成物自带的冒烟测试与源码机械对账，避免造出会漂移的第二真源。
+ * v0.3.0（2026-09-20）生成物**直接对齐 DSH Community Fabric**（RFC 0001 v0.1 **Draft**）：
+ * 静态 manifest `dsh-plugin.json`（§7.1 冻结形状）+ 不依赖 DSH/Cordis 的 host entrypoint 骨架 `src/fabric.ts`；
+ * ⚠ 只有文档、无 schema/SDK/conformance 套件 ⇒ **不得声称「已符合标准/已认证」**（RFC §13）。
+ * v0.3.1（2026-09-20）补 `fabric.version` 透传（回填时写插件**真版本**，不写死 0.1.0）、entrypoint 头部显式标注
+ * 「两个面」（Fabric 契约面 vs DSH/Cordis 非标准面），并新增生态盘点共用工具 `listPluginDirs` / `isThirdPartyRepo`。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -149,6 +152,45 @@ export function findInternalImports(sources: string[]): string[] {
   return Array.from(bad).sort()
 }
 
+// ═══════════════ 生态盘点（脚本与生成器共用同一把尺子）═══════════════
+
+/**
+ * 列出 `<root>` 下的插件目录：**任何含 `package.json` 的非隐藏目录**。
+ * ⚠ 判据刻意**不用** `startsWith('dsh-')`：2026-09-20 实测 `computer-use`（自研、正常在用的插件、无 dsh- 前缀）
+ * 被该前缀过滤**静默漏掉**——审计分母从 58 变 59 才发现（「分派清单会漏格须做集合差」）。
+ * 排除项：隐藏目录、`node_modules`。
+ */
+export function listPluginDirs(root: string): string[] {
+  const out: string[] = []
+  for (const e of readdirSync(root, { withFileTypes: true })) {
+    if (!e.isDirectory() || e.name.startsWith('.') || e.name === 'node_modules') continue
+    if (existsSync(join(root, e.name, 'package.json'))) out.push(e.name)
+  }
+  return out.sort()
+}
+
+/**
+ * 作者判据（§5.23 两条管理路）：`self-plugins/` 目录 ≠ 自研——`dsh-agent-teams` 是第三方
+ * （`github.com/NanmiCoder/...`，走依赖流程：不 fork、不改源码、pin + 黑盒验证）。
+ * 判据：`git remote get-url origin` 不含 `jonah791` ⇒ 第三方；无 git/无 remote 时退回包名 scope。
+ * ⚠ 不要用 `plugin_list` 的分类——它按「是否在 self-plugins 里」归类，会把第三方算成自研。
+ * `gitRemote` 可注入 ⇒ 纯函数可离线测（`null` = 读不到）。
+ */
+export function isThirdPartyRepo(dir: string, pkgName: string, gitRemote: (dir: string) => string | null = readGitRemote): boolean {
+  const url = gitRemote(dir)
+  if (url) return !/jonah791/i.test(url)
+  return pkgName.startsWith('@') && !pkgName.startsWith('@jonah791/')
+}
+
+function readGitRemote(dir: string): string | null {
+  try {
+    const url = execFileSync('git', ['-C', dir, 'remote', 'get-url', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return url || null
+  } catch {
+    return null
+  }
+}
+
 // ═══════════════ DSH Community Fabric（RFC 0001 v0.1 Draft）═══════════════
 
 /**
@@ -177,6 +219,12 @@ export const FABRIC_SCHEMA_PLACEHOLDER = 'https://example.invalid/dsh-community-
 export interface FabricSpec {
   /** 反向 DNS 命名空间 id；缺省 `com.jonah791.<包名去 dsh- 前缀>` */
   id?: string
+  /**
+   * manifest 的 `version` = **插件自身版本**（RFC §7.1 顶层字段）。
+   * 缺省 `0.1.0` 只对**新建插件**成立；存量插件回填时**必须**传 package.json 的真版本——
+   * 给 0.9.0 的插件写 0.1.0 是**假声明**（证据纪律：manifest 是要对外发布的静态事实）。
+   */
+  version?: string
   capabilities?: { required?: string[]; optional?: string[] }
   subscriptions?: string[]
   contributes?: { commands?: Array<{ id: string; title: string }> }
@@ -265,7 +313,7 @@ export function buildFabricManifest(spec: ForgeSpec): string {
     manifestVersion: '0.1.0',
     id,
     name: spec.name,
-    version: '0.1.0',
+    version: f.version ?? '0.1.0',
     apiVersion: range,
     entrypoints: { host: 'lib/fabric.js' },
     capabilities: { required: map(f.capabilities?.required ?? []), optional: map(f.capabilities?.optional ?? []) },
@@ -293,6 +341,10 @@ export function buildFabricEntrypoint(spec: ForgeSpec): string {
     ' * 本文件按 §7.1（entrypoint 独立于 DSH/Cordis）+ §7.5（未来 SDK 形态）预留；SDK 发布后在 activate 内按',
     ' * 协商到的 capability 绑定实现。**在此之前不得声称本插件通过 Fabric conformance**（RFC §13：只有',
     ' * 存在 v0.1 plugin validation 套件时才可如此声称）。',
+    ' *',
+    ' * **两个面（别混）**：本文件只承载 **Fabric 契约面**（前瞻声明）。本插件**实际可运行的功能**在 DSH/Cordis 面',
+    ' * （`src/index.ts` + `cordis.patch.yml`）——那是**非标准扩展路径**：那里的 cordis service 与 `tools` 不在',
+    ' * Fabric v0.1 capability 表内，本文件既不声明也不调用它们；**本骨架不代表本插件能在 Fabric Host 上运行**。',
     ' *',
     ' * 纪律（生成物自带守卫会逐条检查）：',
     ' *   1. 不 import `@deepseek-ai/*`、不 import `cordis`（§7.1：Fabric entrypoint 运行时不依赖 DSH/Cordis）',

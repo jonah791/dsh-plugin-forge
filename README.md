@@ -12,7 +12,7 @@
 # dsh-plugin-forge
 
 <p align="center">
-  <a href="https://github.com/jonah791/dsh-plugin-forge"><img src="https://img.shields.io/badge/version-0.2.0-blue" alt="version"></a>
+  <a href="https://github.com/jonah791/dsh-plugin-forge"><img src="https://img.shields.io/badge/version-0.3.1-blue" alt="version"></a>
   <img src="https://img.shields.io/badge/License-MIT-green" alt="license">
   <img src="https://img.shields.io/badge/TypeScript-3178C6" alt="TypeScript">
   <img src="https://img.shields.io/badge/tests-34%20passed-brightgreen" alt="tests">
@@ -28,20 +28,35 @@
 |------|------|
 | `plugin_forge` | 从 spec 生成插件项目：`src/index.ts` + `src/fabric.ts` + `package.json` + `tsconfig.json` + `cordis.patch.yml` + `README.md` + `docs/semantic.md` + `tests/smoke.test.mjs` + `.gitignore` + `dsh-plugin.json`（**10 件**）；生成后自动 `tsc -p tsconfig.json` 构建验证，返回 `{ok, dir, built, files[], notes[], error?, buildOutput?}` |
 
-spec 字段：`name`（包名，`dsh-` 前缀可省，自动补）· `description` · `inject`（默认 `["tools"]`）· `imports`（额外 import 行数组）· `config`（Config schema 字段）· `tools`（工具数组）· `build`（默认 `true`）· `fabric`（`{id?, capabilities?{required,optional}, subscriptions?, contributes?{commands?}}`——Fabric 静态声明，缺省只写真实内容）。
+spec 字段：`name`（包名，`dsh-` 前缀可省，自动补）· `description` · `inject`（默认 `["tools"]`）· `imports`（额外 import 行数组）· `config`（Config schema 字段）· `tools`（工具数组）· `build`（默认 `true`）· `fabric`（`{id?, version?, capabilities?{required,optional}, subscriptions?, contributes?{commands?}}`——Fabric 静态声明，缺省只写真实内容）。
+
+> `fabric.version` = manifest 的 `version`（插件自身版本）。新建插件缺省 `0.1.0`；**存量插件回填时必须传真版本**——给 0.9.0 的插件写 0.1.0 是**假声明**（v0.3.1 修）。
+
+## 生态盘点与回填（`scripts/`）
+
+两个与生成器**共用判据**的姊妹仪器（`scripts/` 目录——排障脚本一律升级成工具，不留一次性碎片）：
+
+| 脚本 | 用途 |
+|---|---|
+| [`scripts/audit-ecosystem.mjs`](scripts/audit-ecosystem.mjs) | 生态审计：六判据扫全量自研插件（依赖遮蔽 / 内部路径导入 / inject 对账 / 缺 tests / 缺语义文档 / Fabric 面缺失）。**作者判据** = `git remote origin` 非 `jonah791` 即第三方（`self-plugins` 目录 ≠ 自研） |
+| [`scripts/backfill-fabric.mjs`](scripts/backfill-fabric.mjs) | Fabric 面回填：给存量插件补 `dsh-plugin.json` + `src/fabric.ts`（+ `package.json.files` 收进 manifest）。能力面**如实推导**（只认 v0.1 三项，其余 cordis service 一律不写）；写盘前跑 `validateFabricSpec`，不过就不写。`--dry-run` / `--only a,b` / `--force` |
+
+两者与生成器共用 `lib` 导出（`collectCtxServices` / `findInternalImports` / `listPluginDirs` / `isThirdPartyRepo` / `buildFabricManifest` / `buildFabricEntrypoint` / `validateFabricSpec`）——**同一把尺子**，避免生成器与审计器判据漂移。
+
+> `listPluginDirs` **不做 `dsh-` 前缀过滤**：2026-09-20 实测 `computer-use`（自研、正常在用、无前缀）曾被前缀过滤静默漏掉，审计分母 58→59 才发现（「分派清单会漏格须做集合差」）。
 
 `notes[]` 是闸门结论：**声明清晰**（哪些 service 被自动补进 `inject`、哪些声明了没用）+ **Fabric 提示**（订阅与 capability 未一并声明 / 声明了 commands 但没申请 `commands` capability / 本插件含 `tools` 而它不在 v0.1 capability 表内）——见下节。
 
-## Fabric 对齐（v0.3.0 主题）
+## Fabric 对齐（v0.3 主题）
 
 生成物默认自带 **DSH Community Fabric（[RFC 0001](https://github.com/anywhere-labs/dsh-desktop/blob/master/dsh-community-fabric/docs/rfcs/0001-plugin-manifest-capabilities-events.zh.md) v0.1 Draft）** 的静态契约面：
 
 | 项 | 内容 |
 |---|---|
 | `dsh-plugin.json` | §7.1 冻结形状逐字段：`$schema` · `manifestVersion: 0.1.0` · `id`（反向 DNS，缺省 `com.jonah791.<包名>`）· `name` · `version` · `apiVersion: >=0.1.0 <0.2.0` · `entrypoints.host: lib/fabric.js` · `capabilities.{required,optional}`（**值为版本范围**）· `subscriptions` · `contributes.commands` |
-| `src/fabric.ts` → `lib/fabric.js` | host entrypoint 骨架：默认导出 `activate(ctx)` + 幂等 `deactivate()`；**不依赖 DSH/Cordis** |
+| `src/fabric.ts` → `lib/fabric.js` | host entrypoint 骨架：默认导出 `activate(ctx)` + 幂等 `deactivate()`；**不依赖 DSH/Cordis**。头部显式标注**两个面**（Fabric 契约面 vs DSH/Cordis 非标准面）——骨架**不代表**插件能在 Fabric Host 上运行 |
 | 生成器闸门（写盘前） | capability 白名单（`commands` / `messages.observe` / `storage.local` 或 `x-org.*`）· `id` 反向 DNS 形态 · 拒绝 `provides` / `requires.services`（§7.1）· 事件名限 `messages.observe`（§7.4）· `contributes.commands.id` 必须在自身命名空间 |
-| 生成物守卫（6 条） | manifest 必填字段 · `$schema` 必须自证 draft · `$schema` 版本段 ≡ `manifestVersion` · id/capability 白名单 · subscriptions/commands 形状 · entrypoint 不依赖 DSH/Cordis |
+| 生成物守卫（**14 条**） | manifest 必填字段 · `$schema` 必须自证 draft · `$schema` 版本段 ≡ `manifestVersion` · id/capability 白名单 · subscriptions/commands 形状 · entrypoint 不依赖 DSH/Cordis（剔注释后判）· 能力边界与两个面在 README 里写明 |
 
 > ⚠ **Draft，不是认证**：Fabric 目前只有文档（无正式 schema、无 SDK、无 conformance 套件），RFC §14 的 canonical `$schema` identifier 尚无归属，官方 [plugin-development.md](https://github.com/anywhere-labs/dsh-desktop/blob/master/docs/plugin-development.md) 明示其**尚不能作为依赖或发布目标**。因此：`$schema` 是 `.invalid` 占位（Phase 0 发布后替换单点常量）；生成物的 README 会显式区分「Fabric 契约面（前瞻声明）」与「DSH/Cordis 面（**非标准扩展路径**）」。RFC §13 规定插件**只能**声称「通过 v0.1 plugin validation」——而该套件尚不存在，故**任何声称「已符合 Fabric 标准 / 通过认证」的说法都是不成立的**。
 
@@ -52,12 +67,11 @@ spec 字段：`name`（包名，`dsh-` 前缀可省，自动补）· `descriptio
 | 原则 | 闸门 | 判据 |
 |------|------|------|
 | **声明清晰** | `resolveInject()` 静态扫 `execute` 体里的 `ctx.<svc>`，与 spec 的 `inject` 对账并**自动补齐**，差异进 `notes[]` | `inject` 恰为「声明 ∪ 实际使用」；生成物自测断言**没有未声明的 service** |
-| **声明清晰** | `package.json` 的 `dshForge` 静态声明（`inject` / `contributes` / `capability`） | 生成物自测断言 `dshForge.inject` 与源码 `export const inject` **逐字一致**（不造会漂移的第二真源） |
 | **组合优先** | `findInternalImports()` 拒绝跨插件/宿主的**内部路径**导入（`dsh-x/lib/...`、`@deepseek-ai/x/dist/...`） | 命中即 `ok:false`，错误串给出「改走公开入口」的出路；生成物自测同样扫一遍源码 |
 | **兼容优先** | `prepareBuildEnv()` **只**链 `typescript` 与 `@types`，**绝不**链 `@deepseek-ai` | 生成目录里 `node_modules/@deepseek-ai` 不存在（解析全部走宿主共享根） |
-| —— | **能力边界诚实声明** | 生成物 README 含「不构成安全沙箱」；`dshForge.capability.sandbox = false` |
+| —— | **能力边界诚实声明** | 生成物 README 含「不构成安全沙箱」，并显式区分两个面（Fabric 契约面 / DSH-Cordis **非标准扩展路径**） |
 
-> ⚠ `dshForge` 是**本插件的本地约定**，**不是** Community Fabric manifest——[RFC 0001](https://github.com/anywhere-labs/dsh-desktop/blob/master/dsh-community-fabric/docs/rfcs/0001-plugin-manifest-capabilities-events.zh.md) 目前仍是 Draft，不是已发布标准，当前插件继续使用 DSH/Cordis 现有接口。字段刻意与官方 `package.json` 命名空间分开，避免与未来官方语义撞名。
+> ⚠ v0.2 引入的 `dshForge` **本地声明已于 v0.3.0 删除**（被 `dsh-plugin.json` 取代，避免平行真源）；本节的 `dshForge` 行与守卫随之退场，README 中残留引用于 v0.3.1 清理。
 
 ## 快速开始
 
@@ -159,14 +173,16 @@ ls -l <selfPluginsDir>/<name>/ && tail -3 <selfPluginsDir>/<name>/lib/index.js
 npm test        # = node --test "tests/*.test.mjs"（跑 lib/ 产物，与运行时同源）
 ```
 
-**34 例离线测试**（Windows 与 WSL 双平台各 34/34 通过）：
+**46 例离线测试**（Windows 与 WSL 双平台各 46/46 通过）：
 
-- 正常路径：spec → 8 件产物齐全、`pluginId` 约定（`dsh-x-y` → `agent-x-y`）、`Config` 生成、`inject` 自动前置 `tools`；
+- 正常路径：spec → **10 件**产物齐全、`pluginId` 约定（`dsh-x-y` → `agent-x-y`）、`Config` 生成、`inject` 自动前置 `tools`；
 - 失败/退化路径：非法包名、目标目录已存在、对象级 `required` 数组被拒（**这条是 2026-09-01 崩宿主教训的回归**）、跨插件内部路径导入被拒；
-- 生态闸门：`collectCtxServices` 剔除 cordis 内建成员、`resolveInject` 自动补齐 + 未使用报告、`findInternalImports` 不误伤公开入口、`dshForge` 与源码同源、`resolveUpFrom` 找不到即 `null`；
+- 生态闸门：`collectCtxServices` 剔除 cordis 内建成员、`resolveInject` 自动补齐 + 未使用报告、`findInternalImports` 不误伤公开入口、`resolveUpFrom` 找不到即 `null`；
+- Fabric 判据：`defaultFabricId` / `isFabricId` 形态、`validateFabricSpec` 通过与拒绝两路、`fabricSpecNotes` 只提示不拒绝（RFC 0003 §3）、manifest 冻结形状 + `version` 取真版本、entrypoint 两个面标注；
+- 生态盘点：`listPluginDirs`（**不做 dsh- 前缀过滤**）、`isThirdPartyRepo`（remote 判据 + 无 remote 回落 scope）；
 - 纯函数确定性：同 spec 两次 `buildSource` / `buildFiles` 结果逐字相等（无 IO、无时钟依赖）；
-- 生成物自带回归：写临时目录后跑生成物的 `tests/smoke.test.mjs` → **9 pass**；
-- **四条尸体测试**：删 `docs/semantic.md` / 把 `inject` 改空（漏声明 `tools`）/ 往 `src` 塞内部路径导入 → 生成物测试必须转红（守卫非空断言）。
+- 生成物自带回归：写临时目录后跑生成物的 `tests/smoke.test.mjs` → **14 pass**；
+- **六条尸体测试**：删 `docs/semantic.md` / 把 `inject` 改空（漏声明 `tools`）/ 往 `src` 塞内部路径导入 / 把 manifest capability 改成后续候选 `sessions.read` / 往 `src/fabric.ts` 塞 `@deepseek-ai` import → 生成物测试必须转红（守卫非空断言）。
 
 **无需网络、无需真实外部依赖**；需要本机有 `typescript`（走自身 `node_modules` 或 `tscPath`）。**离线单测不需要已挂载的 web 实例**。
 
@@ -183,8 +199,8 @@ npm test        # = node --test "tests/*.test.mjs"（跑 lib/ 产物，与运行
 
 | 文档 | 内容 |
 |------|------|
-| [`docs/semantic.md`](docs/semantic.md) | **权威契约**：定位与反定位、术语、概念模型、契约（生成物形状 + 状态→裁决表 + 调用点清单）、生态闸门、可证伪验收清单（A1–A23）、未决问题 |
-| [DSH 插件生态倡议书](https://github.com/anywhere-labs/dsh-desktop/blob/master/docs/plugin-ecosystem.md) | 组合优先 / 声明清晰 / 兼容优先（本插件 v0.2.0 的闸门依据） |
+| [`docs/semantic.md`](docs/semantic.md) | **权威契约**：定位与反定位、术语、概念模型、契约（生成物形状 + 状态→裁决表 + 调用点清单）、生态闸门、可证伪验收清单（A1–A37）、未决问题 |
+| [DSH 插件生态倡议书](https://github.com/anywhere-labs/dsh-desktop/blob/master/docs/plugin-ecosystem.md) | 组合优先 / 声明清晰 / 兼容优先（本插件 v0.2 的闸门依据） |
 | [Community Fabric RFC 0001](https://github.com/anywhere-labs/dsh-desktop/blob/master/dsh-community-fabric/docs/rfcs/0001-plugin-manifest-capabilities-events.zh.md) | Manifest / Capability / 事件模型（**Draft**：静态声明思想已借鉴，未声称符合） |
 | [alice-digital-life](https://github.com/jonah791/alice-digital-life) | 本插件所属生态的中心索引（全部自研插件） |
 | 技能 `plugin-forge-design` / `dsh-plugin-development` / `plugin-maintainability` | 插件快速创建方法论、插件开发契约、可维护性工程 |

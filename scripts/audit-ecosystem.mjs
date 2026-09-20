@@ -15,28 +15,22 @@
  *
  * 用法：node scripts/audit-ecosystem.mjs [selfPluginsDir]
  */
-import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
-import { join } from 'node:path'
-import { execFileSync } from 'node:child_process'
-import { collectCtxServices, findInternalImports } from '../lib/index.js'
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { join, dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { collectCtxServices, findInternalImports, listPluginDirs, isThirdPartyRepo } from '../lib/index.js'
 
-const ROOT = process.argv[2] ?? 'E:/alice/self-plugins'
+/** 默认根 = 本脚本所在仓的**父目录**（`self-plugins/`）——从脚本位置推导，Windows/WSL 同一真源 */
+const ROOT = process.argv[2] ?? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const CORE_EXCLUDE_DIRS = new Set(['node_modules', 'lib', 'dist', '.git', 'docs', 'tests'])
 
 /**
  * **作者判据（2026-09-20 加，主人纠正后）**：self-plugins 目录里**不全是我的**——`dsh-agent-teams` 是
  * `github.com/NanmiCoder/...` 的第三方（走 §5.23 依赖流程：不 fork、不改源码、pin + 黑盒验证）。
  * ⚠ 不要用 `plugin_list` 的分类：它按「是否在 self-plugins 里」归类，会把第三方算成「自研」。
- * 判据：git remote origin 非 jonah791 ⇒ 第三方；无 git remote 时退回包名 scope 判断。
+ * 判据实现已上移到 `lib`（`isThirdPartyRepo`）——**与回填器共用一份**，避免两套判据漂移。
  */
-function isThirdParty(dir, pkg) {
-  try {
-    const url = execFileSync('git', ['-C', dir, 'remote', 'get-url', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
-    if (url) return !/jonah791/i.test(url)
-  } catch { /* 无 git / 无 remote */ }
-  const name = String(pkg.name ?? '')
-  return name.startsWith('@') && !name.startsWith('@jonah791/')
-}
+const isThirdParty = (dir, pkg) => isThirdPartyRepo(dir, String(pkg.name ?? ''))
 
 function walk(dir, acc = []) {
   let entries = []
@@ -76,9 +70,8 @@ const NON_SERVICE = new Set(['length', 'slice', 'now', 'nowMs', 'map', 'filter',
 const touchesCordis = (s) => /@deepseek-ai\/cordis|:\s*Context\b|\bContext\b/.test(s)
 
 const rows = []
-for (const name of readdirSync(ROOT, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name.startsWith('dsh-')).map((d) => d.name)) {
+for (const name of listPluginDirs(ROOT)) {
   const dir = join(ROOT, name)
-  if (!existsSync(join(dir, 'package.json'))) continue
   const pkg = JSON.parse(read('package.json') || '{}')
   const srcFiles = walk(join(dir, 'src')).filter(isHostSide)
   const stripped = srcFiles.map((f) => ({ f, s: strip(read(f)) })).filter((x) => touchesCordis(x.s))

@@ -15,6 +15,7 @@ import {
   buildPatch, buildReadme, buildSemanticDoc, buildSmokeTest, buildFiles,
   collectCtxServices, resolveInject, findInternalImports, buildGitignore, resolveUpFrom,
   buildFabricManifest, buildFabricEntrypoint, validateFabricSpec, defaultFabricId, isFabricId, fabricSpecNotes,
+  listPluginDirs, isThirdPartyRepo,
 } from '../lib/index.js'
 
 const SPEC = {
@@ -371,6 +372,32 @@ test('buildFabricManifest: 退化——无 fabric 字段时只写真实内容（
   assert.equal(m.id, 'com.jonah791.bare')
 })
 
+test('buildFabricManifest: version 取**插件真版本**（存量回填不得写死 0.1.0——那是假声明）', () => {
+  const real = JSON.parse(buildFabricManifest({ name: 'dsh-agent-context', description: 'd', fabric: { version: '0.2.3' } }))
+  assert.equal(real.version, '0.2.3', 'manifest 的 version 是插件自身版本；0.9.0 的插件写 0.1.0 即对外假声明')
+  const fresh = JSON.parse(buildFabricManifest({ name: 'dsh-new', description: 'd' }))
+  assert.equal(fresh.version, '0.1.0', '缺省 0.1.0 只对**新建插件**成立')
+})
+
+test('listPluginDirs: 含 package.json 的非隐藏目录**全部**纳入（不做 dsh- 前缀过滤——computer-use 曾被静默漏掉）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'forge-dirs-'))
+  mkdirSync(join(dir, 'dsh-a')); writeFileSync(join(dir, 'dsh-a', 'package.json'), '{}')
+  mkdirSync(join(dir, 'computer-use')); writeFileSync(join(dir, 'computer-use', 'package.json'), '{}')
+  mkdirSync(join(dir, 'no-pkg'))
+  mkdirSync(join(dir, '.hidden')); writeFileSync(join(dir, '.hidden', 'package.json'), '{}')
+  mkdirSync(join(dir, 'node_modules'))
+  assert.deepEqual(listPluginDirs(dir), ['computer-use', 'dsh-a'], '分母必须等于「含 package.json 的插件目录」全集，前缀过滤会漏格')
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('isThirdPartyRepo: remote 非 jonah791 即第三方；无 remote 退回包名 scope（§5.23 两条管理路）', () => {
+  assert.equal(isThirdPartyRepo('/x', 'dsh-a', () => 'https://github.com/jonah791/dsh-a.git'), false)
+  assert.equal(isThirdPartyRepo('/x', 'dsh-a', () => 'https://github.com/NanmiCoder/dsh-agent-teams.git'), true, '目录在 self-plugins 里 ≠ 自研')
+  assert.equal(isThirdPartyRepo('/x', '@nanmicoder/dsh-agent-teams', () => null), true)
+  assert.equal(isThirdPartyRepo('/x', '@jonah791/x', () => null), false)
+  assert.equal(isThirdPartyRepo('/x', 'dsh-agent-context', () => null), false)
+})
+
 test('buildFabricEntrypoint: 不依赖 DSH/Cordis（§7.1）且默认导出、声明插件 id', () => {
   const raw = buildFabricEntrypoint({ name: 'dsh-demo', description: 'd' })
   // 剔除注释后再判 import——注释里说明「不得 import @deepseek-ai/*」不该被当成违规（2026-09-20 踩过这个假阳性）
@@ -380,6 +407,7 @@ test('buildFabricEntrypoint: 不依赖 DSH/Cordis（§7.1）且默认导出、�
   assert.match(raw, /export default function activate/)
   assert.match(raw, /export const fabricPluginId = "com\.jonah791\.demo"/)
   assert.match(raw, /不可运行/, '骨架必须显式声明现在不可运行（SDK 未发布）')
+  assert.match(raw, /两个面/, '骨架必须显式区分 Fabric 契约面 与 DSH/Cordis 非标准面——否则会被读成「本插件能在 Fabric Host 上运行」')
 })
 
 test('normalizeSpec: Fabric 契约闸门——非法 capability 在写盘前被拒；无 fabric 字段时给出提示 note', () => {

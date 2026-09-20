@@ -1,10 +1,11 @@
 # 语义文档：插件创建器（plugin forge）
 
-> 版本 v0.3 · 2026-09-20 · 作者：爱丽丝 · 状态：**draft**
+> 版本 v0.3.1 · 2026-09-20 · 作者：爱丽丝 · 状态：**draft**
 > 开发方式：补课式回填（实现已存在，语义文档事后对齐；后续改动用实践回修）
 > 实现落点：`self-plugins/dsh-plugin-forge/src/index.ts`（单文件，含生成器纯函数 + 工具注册）
 > v0.2 主题：把《DSH 插件生态倡议书》三条原则落成可机械验证的闸门（见 §4.5 / §5 / §9）
 > v0.3 主题：**生成物直接对齐 DSH Community Fabric（RFC 0001 v0.1 Draft）**——产出 `dsh-plugin.json` + 不依赖 Cordis 的 host entrypoint，并把 RFC 明文规则落成生成器闸门与生成物守卫（见 §4.6 / §9）
+> v0.3.1 主题：**存量插件 Fabric 面回填支撑**——`fabric.version` 透传（写真版本）、entrypoint 标注两个面、生态盘点工具上移进 `lib`（`listPluginDirs` / `isThirdPartyRepo`）+ 新回填器 `scripts/backfill-fabric.mjs`；并补齐 v0.3.0 漏做的版本号与 README 同步（见 §9）
 
 | 项 | 值 |
 |----|----|
@@ -208,6 +209,16 @@
 | A31 | `$schema` 版本段与 `manifestVersion` 一致 | 生成物守卫 `$schema 版本段与 manifestVersion 一致`（RFC §7.1：不得成为第二协商轴） | **已实测** |
 | A32 | 线上真调产出 10 件且自测 14/14 | 真实 `plugin_forge` 调用 → `files[]` 10 项 + 目录内 `node --test tests/smoke.test.mjs` → `pass 14 / fail 0` | **待线上验收**（需重启后真调） |
 
+**v0.3.1（2026-09-20·存量回填支撑）新增验收**
+
+| ID | 声明 | 判据（可复现命令 / 断言） | 状态 |
+|----|------|--------------------------|------|
+| A33 | manifest 的 `version` 取**插件真版本**（不写死 0.1.0） | 单测 `buildFabricManifest: version 取插件真版本`（`fabric.version='0.2.3'` ⇒ `m.version==='0.2.3'`；缺省仍 `0.1.0`） | **已实测**（46/46） |
+| A34 | entrypoint 头部显式标注**两个面** | 单测 `buildFabricEntrypoint: …` 断言正文含 `两个面`（防被读成「能在 Fabric Host 上运行」） | **已实测** |
+| A35 | 生态盘点**不做 `dsh-` 前缀过滤**（分母 = 含 package.json 的全部目录） | 单测 `listPluginDirs`：夹具含 `dsh-a` / `computer-use` / `no-pkg` / `.hidden` / `node_modules` ⇒ 只返回 `['computer-use','dsh-a']`；**线上**：审计器分母 58 → **59**（`computer-use` 曾被静默漏掉） | **已实测** |
+| A36 | 作者判据单一真源（审计器与回填器共用） | 单测 `isThirdPartyRepo` 5 断言（jonah791⇒false / NanmiCoder⇒true / 无 remote 时 `@scope`⇒true、`@jonah791` 与裸名⇒false）；两脚本均 `import ... from '../lib/index.js'`，无本地副本 | **已实测** |
+| A37 | 存量自研插件回填：全部过 `validateFabricSpec`，且各仓 `tsc` exit 0、自身测试仍绿 | `node scripts/backfill-fabric.mjs --dry-run` → `失败 0`；`node scripts/backfill-fabric.mjs` 后逐仓 `tsc -p tsconfig.json` + `node --test`；`node scripts/audit-ecosystem.mjs` 的「缺 dsh-plugin.json」应从 59 降到 1（只剩第三方） | **待验收**（执行中） |
+
 **生效判据（S7）**：改动 `src/index.ts` 后，按序取证——
 ① **产物新**：`lib/index.js` 的 mtime **晚于** web 进程启动时间（仅此一条不足，见 AGENTS.md §5.11 §6）；
 ② **进程在跑它**：web 进程启动时间 **晚于** `lib/index.js` mtime（否则线上仍是旧构建）；
@@ -270,6 +281,19 @@
   - **实测（双平台）**：本插件 **43/43**（Windows `ℹ pass 43` · WSL `# pass 43`）；生成物自测 **14/14**（含 6 条 Fabric 守卫）；尸体测试 4 → **6 条**（新增：capability 越白名单 ⇒ 转红；entrypoint 依赖 `@deepseek-ai` ⇒ 转红）。
   - **实测踩坑（判据假阳性）**：生成物 entrypoint 的**注释**里写了「不得 import `@deepseek-ai/*`」，被朴素正则当成违规 import ⇒ 判据改为**剔除注释后再判 import**（注释里提到包名不算依赖）。同一模式也修了我自己的单测。
   - **教训**：读规范要读**全文**——v0.3 初稿有三处判断基于 RFC 0001 单篇推断，被 0002（command tree 不属 v0.1）、0003（五类声明不可混）、0004（`.invalid` 占位惯例）各改写一条。
+
+**2026-09-20 v0.3.1：存量回填支撑 + 补上一轮漏做的同步**
+
+- 语义**被补充**：`FabricSpec.version`（manifest 的 `version` = **插件自身版本**）——`buildFabricManifest` 从写死 `'0.1.0'` 改为 `f.version ?? '0.1.0'`。**理由（证据纪律）**：manifest 是要对外发布的静态事实，给 0.9.0 的插件写 `0.1.0` 属**假声明**；缺省值只对新建插件成立。
+- 语义**被补充（措辞，写进产物）**：entrypoint 头部新增「**两个面（别混）**」段——本文件只承载 Fabric 契约面；插件实际功能在 DSH/Cordis 面（**非标准扩展路径**），其 service 与 `tools` 不在 v0.1 capability 表内；并明写「**本骨架不代表本插件能在 Fabric Host 上运行**」。防的是「有 manifest + 有 entrypoint ⇒ 以为可移植」的误读。
+- 语义**被补充（工具面）**：`lib` 新增 `listPluginDirs(root)` 与 `isThirdPartyRepo(dir, pkgName, gitRemote?)`——**判据单一真源**（审计器与回填器同源导入，不再各写一份）。
+- 语义**被修正（仪器缺陷，实测发现）**：审计器原先按 `startsWith('dsh-')` 枚举目录 ⇒ **`computer-use`（自研、正常在用、无前缀）被静默漏掉**，分母 58 实为 59。同类陷阱（「分派清单会漏格须做集合差」）在 2026-09-14 批量补课里已出现过一次——**分母必须等于「含 package.json 的插件目录」全集**。
+- **实测（仪器复核）**：本插件 **46/46**（43 → +2 生态盘点工具 +1 version 透传）；审计器线上分母 **59 = 自研 58 + 第三方 1**，硬判据命中 **0**（对照 v0.3 交付时的 57/58——**当时的分母本身就是错的**）。
+- **实测踩坑（回填器，同一坑第二次）**：在**已剔字符串**的文本上抓 command 名必然抓空（`name: 'context'` 被抹成 `''`）⇒ 拆成两种读法：服务用法判在「全剔」文本，**command 名判在「只剔注释」文本**，并先在代码态确认存在 `ctx.commands.register(` 再声明 `commands`（防模板字符串里的示例被当真实注册）。
+- **实测踩坑（回填器，默认路径）**：默认根原先写死 Windows 形式 `E:/alice/self-plugins` ⇒ 在 WSL 里 `ENOENT`。改为**从脚本位置推导**（`resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')`）——Windows/WSL 同一真源。
+- **实测踩坑（回填器，`files` 补写）**：整文件 `JSON.stringify` 重排会为加一行淹没整个 diff ⇒ 改**保风格的最小文本插入** + 写前 `JSON.parse` 回读校验。
+- **我上一轮的滑脱（如实记录，属交付完整性缺口）**：v0.3.0 **功能已交付但版本号未同步**——`package.json` 仍 `0.2.0`、`description` 仍写「8 件」、README 徽章 `0.2.0`、README 仍把**已删除的 `dshForge`** 当现存闸门（并声称 `dshForge.capability.sandbox = false`）、测试计数「34 例 / 9 pass / 四条尸体测试」与验收「A1–A23」均为旧值。⇒ v0.3.1 一并修正（版本 `0.3.1`、描述改「10 件 + Fabric」、README 同步、`files` 收进 `dsh-plugin.json`）；**教训：升版不是只改功能，声明面（版本/描述/README/验收编号）必须同提交对账**。
+- **教训（判据的载体）**：`version` 这类「对外声明字段」一旦有**缺省值**，就存在「默认值悄悄变成假声明」的通道——缺省只应在「新建」语义下成立，回填/迁移路径必须**显式传值**。
 
 ## 10 · 未决问题
 
