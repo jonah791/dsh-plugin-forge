@@ -13,7 +13,8 @@ import { spawnSync } from 'node:child_process'
 import {
   pluginId, sanitizeRequired, normalizeSpec, buildSource, buildPackageJson, buildTsconfig,
   buildPatch, buildReadme, buildSemanticDoc, buildSmokeTest, buildFiles,
-  collectCtxServices, resolveInject, findInternalImports, buildForgeManifest, buildGitignore, resolveUpFrom,
+  collectCtxServices, resolveInject, findInternalImports, buildGitignore, resolveUpFrom,
+  buildFabricManifest, buildFabricEntrypoint, validateFabricSpec, defaultFabricId, isFabricId, fabricSpecNotes,
 } from '../lib/index.js'
 
 const SPEC = {
@@ -181,11 +182,11 @@ test('buildReadme: 退化路径——无 tools 时清单为空但结构完整', 
 
 // ---------- 模板产出清单（本次补齐的不变量） ----------
 
-test('buildFiles: 产出清单固定为 8 件（含 docs/semantic.md、tests/smoke.test.mjs、.gitignore）', () => {
+test('buildFiles: 产出清单固定为 10 件（含 .gitignore、dsh-plugin.json、src/fabric.ts）', () => {
   const files = buildFiles(SPEC)
   assert.deepEqual(Object.keys(files).sort(), [
-    '.gitignore', 'README.md', 'cordis.patch.yml', 'docs/semantic.md', 'package.json',
-    'src/index.ts', 'tests/smoke.test.mjs', 'tsconfig.json',
+    '.gitignore', 'README.md', 'cordis.patch.yml', 'docs/semantic.md', 'dsh-plugin.json',
+    'package.json', 'src/fabric.ts', 'src/index.ts', 'tests/smoke.test.mjs', 'tsconfig.json',
   ])
   assert.ok(files['package.json'].includes('"test"'), '生成物必须暴露 test 脚本')
 })
@@ -248,22 +249,10 @@ test('findInternalImports: 组合优先——别家包的内部路径命中，�
   ]), [], '包根入口是公开面，不得被当成内部路径')
 })
 
-test('buildForgeManifest: 静态声明（本地约定）——contract/inject/contributes/capability 齐全', () => {
-  const m = buildForgeManifest(SPEC)
-  assert.equal(m.contract, 1)
-  assert.deepEqual(m.inject, ['tools'])
-  assert.deepEqual(m.contributes.tools, ['demo_ping'])
-  assert.equal(m.capability.runtime, 'trusted-in-process')
-  assert.equal(m.capability.sandbox, false, '不得把同进程插件伪装成沙箱')
-  assert.match(m.capability.note, /不构成技术强制/)
-})
-
-test('buildPackageJson: 内嵌 dshForge 静态声明且与源码 inject 同源', () => {
+test('buildPackageJson: files 含 dsh-plugin.json（manifest 随包发布）+ 本地 dshForge 声明已被取代', () => {
   const pkg = JSON.parse(buildPackageJson(SPEC))
-  assert.ok(pkg.dshForge, '必须有 dshForge 声明')
-  const src = buildSource(SPEC)
-  const declared = JSON.parse(/export const inject = (\[[^\]]*\]) as const/.exec(src)[1])
-  assert.deepEqual(pkg.dshForge.inject, declared, '两个表示必须同源（单一真源）')
+  assert.ok(pkg.files.includes('dsh-plugin.json'), 'RFC 0001 §7.1：manifest 位于 package 根目录 ⇒ 必须随包发布')
+  assert.equal(pkg.dshForge, undefined, 'dshForge 本地声明已被真 Fabric manifest 取代（两个平行真源会漂移）')
 })
 
 test('buildGitignore: 忽略 node_modules 与 lib（新插件不从「忘记忽略」起步）', () => {
@@ -298,7 +287,10 @@ test('normalizeSpec: 声明清晰——notes 报告自动补齐与「声明了�
   assert.equal(r.ok, true)
   assert.ok(r.notes.some((n) => /已自动补声明 inject: llm/.test(n)), `缺补齐说明：${JSON.stringify(r.notes)}`)
   assert.ok(r.notes.some((n) => /声明了未使用的 service: subprocess/.test(n)), `缺未使用说明：${JSON.stringify(r.notes)}`)
-  assert.deepEqual(normalizeSpec({ name: 'demo', description: 'd' }).notes, [], '干净 spec 不得产生噪音说明')
+  assert.deepEqual(normalizeSpec({ name: 'demo', description: 'd', fabric: { capabilities: { required: ['commands'] } } }).notes, [], '显式给了 fabric 就不该有默认提示（声明的噪音同样不该出现）')
+  const bare = normalizeSpec({ name: 'demo', description: 'd' }).notes
+  assert.equal(bare.length, 1, `无 fabric 字段时应恰好一条默认提示：${JSON.stringify(bare)}`)
+  assert.match(bare[0], /Fabric manifest 已按默认生成/)
 })
 
 test('buildReadme: 生态契约 + 能力边界两节（capability ≠ 沙箱写进产物）', () => {
@@ -310,6 +302,97 @@ test('buildReadme: 生态契约 + 能力边界两节（capability ≠ 沙箱写�
   assert.match(md, /组合行 id：`agent-demo-tool`/)
 })
 
+// ---------- Fabric（RFC 0001 v0.1 Draft）：manifest 契约 ----------
+
+test('defaultFabricId / isFabricId: 反向 DNS 命名空间（§7.1 要求正式 schema 定义 id 语法）', () => {
+  assert.equal(defaultFabricId('dsh-foo-bar'), 'com.jonah791.foo-bar')
+  assert.equal(isFabricId('com.jonah791.foo-bar'), true)
+  assert.equal(isFabricId('com.example.x'), true)
+  assert.equal(isFabricId('foo'), false, '单段不是命名空间')
+  assert.equal(isFabricId('Com.Example'), false, '必须全小写')
+  assert.equal(isFabricId('com.1example'), false, '段不得以数字开头')
+})
+
+test('validateFabricSpec: 通过路径——v0.1 白名单 + x- 私有命名空间 + 自洽的订阅/命令', () => {
+  const errs = validateFabricSpec({
+    name: 'dsh-demo', description: 'd',
+    fabric: {
+      capabilities: { required: ['commands', 'messages.observe'], optional: ['storage.local', 'x-org.example.tui.keymap'] },
+      subscriptions: ['messages.observe'],
+      contributes: { commands: [{ id: 'com.jonah791.demo.show', title: 'Show' }] },
+    },
+  })
+  assert.deepEqual(errs, [])
+})
+
+test('validateFabricSpec: 拒绝路径——后续候选能力 / 暂缓能力 / provides / 订阅未声明 / command 越界', () => {
+  const base = (fabric) => ({ name: 'dsh-demo', description: 'd', fabric })
+  assert.match(validateFabricSpec(base({ capabilities: { required: ['sessions.read'] } }))[0], /不在 v0.1 协商白名单/)
+  assert.match(validateFabricSpec(base({ capabilities: { required: ['net.http'] } }))[0], /不在 v0.1 协商白名单/)
+  assert.match(validateFabricSpec(base({ capabilities: { required: ['requires.services'] } }))[0], /必须拒绝的声明类别/)
+  assert.match(validateFabricSpec(base({ capabilities: { required: ['provides.x'] } }))[0], /必须拒绝的声明类别/)
+  assert.match(validateFabricSpec(base({ capabilities: { required: ['commands'] }, contributes: { commands: [{ id: 'com.other.x', title: 'X' }] } }))[0], /必须落在插件自己的命名空间/)
+  assert.match(validateFabricSpec(base({ id: 'Bad.Id' }))[0], /不是合法反向 DNS 命名空间/)
+})
+
+test('fabricSpecNotes: 订阅与 capability 不混为一谈——只提示不拒绝（RFC 0003 §3）', () => {
+  // RFC 0003 §3：subscriptions 只表示投递意向，不是 capability/dependency/contribution ⇒ 不能当违规拒绝
+  const spec = { name: 'dsh-demo', description: 'd', fabric: { capabilities: { required: ['commands'] }, subscriptions: ['messages.observe'] } }
+  assert.deepEqual(validateFabricSpec(spec), [], '不得因「订阅了没申请同名 capability」而拒绝')
+  const notes = fabricSpecNotes(spec)
+  assert.equal(notes.length, 1)
+  assert.match(notes[0], /订阅了事件「messages\.observe」但未申请同名 capability/)
+  assert.deepEqual(fabricSpecNotes({ name: 'dsh-demo', description: 'd', fabric: { capabilities: { required: ['messages.observe'] }, subscriptions: ['messages.observe'] } }), [])
+})
+
+test('buildFabricManifest: §7.1 冻结形状逐字段 + $schema 是**自证 draft 的占位**', () => {
+  const m = JSON.parse(buildFabricManifest({
+    name: 'dsh-demo', description: 'd',
+    fabric: { capabilities: { required: ['commands'], optional: ['storage.local'] }, subscriptions: ['commands'], contributes: { commands: [{ id: 'com.jonah791.demo.go', title: 'Go' }] } },
+  }))
+  assert.equal(m.manifestVersion, '0.1.0')
+  assert.equal(m.id, 'com.jonah791.demo')
+  assert.equal(m.name, 'dsh-demo')
+  assert.equal(m.version, '0.1.0')
+  assert.equal(m.apiVersion, '>=0.1.0 <0.2.0')
+  assert.deepEqual(m.entrypoints, { host: 'lib/fabric.js' })
+  assert.deepEqual(m.capabilities.required, { commands: '>=0.1.0 <0.2.0' })
+  assert.deepEqual(m.capabilities.optional, { 'storage.local': '>=0.1.0 <0.2.0' })
+  assert.deepEqual(m.subscriptions, [{ event: 'commands', version: '>=0.1.0 <0.2.0' }])
+  assert.deepEqual(m.contributes.commands, [{ id: 'com.jonah791.demo.go', title: 'Go' }])
+  assert.match(m.$schema, /draft/, 'RFC §14 开放问题 1：canonical identifier 尚无归属 ⇒ 只能是 draft 占位，不得冒充已发布标识符')
+})
+
+test('buildFabricManifest: 退化——无 fabric 字段时只写真实内容（capabilities 为空，不编造）', () => {
+  const m = JSON.parse(buildFabricManifest({ name: 'dsh-bare', description: 'd' }))
+  assert.deepEqual(m.capabilities, { required: {}, optional: {} })
+  assert.deepEqual(m.subscriptions, [])
+  assert.deepEqual(m.contributes, { commands: [] })
+  assert.equal(m.id, 'com.jonah791.bare')
+})
+
+test('buildFabricEntrypoint: 不依赖 DSH/Cordis（§7.1）且默认导出、声明插件 id', () => {
+  const raw = buildFabricEntrypoint({ name: 'dsh-demo', description: 'd' })
+  // 剔除注释后再判 import——注释里说明「不得 import @deepseek-ai/*」不该被当成违规（2026-09-20 踩过这个假阳性）
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  assert.equal(/@deepseek-ai\//.test(src), false, 'Fabric entrypoint 不得 import @deepseek-ai/*（剔除注释后）')
+  assert.equal(/from\s+['"]cordis['"]/.test(src), false, 'Fabric entrypoint 不得 import cordis（剔除注释后）')
+  assert.match(raw, /export default function activate/)
+  assert.match(raw, /export const fabricPluginId = "com\.jonah791\.demo"/)
+  assert.match(raw, /不可运行/, '骨架必须显式声明现在不可运行（SDK 未发布）')
+})
+
+test('normalizeSpec: Fabric 契约闸门——非法 capability 在写盘前被拒；无 fabric 字段时给出提示 note', () => {
+  const bad = normalizeSpec({ name: 'demo', description: 'd', fabric: { capabilities: { required: ['sessions.read'] } } })
+  assert.equal(bad.ok, false)
+  assert.match(bad.error, /Fabric 契约违规/)
+  const ok = normalizeSpec({ name: 'demo', description: 'd', fabric: { capabilities: { required: ['commands'] } } })
+  assert.equal(ok.ok, true)
+  assert.deepEqual(ok.notes, [], '显式给了 fabric 就不该再提示缺声明')
+  const bare = normalizeSpec({ name: 'demo', description: 'd' })
+  assert.ok(bare.notes.some((n) => /Fabric manifest 已按默认生成/.test(n)), `缺默认提示：${JSON.stringify(bare.notes)}`)
+})
+
 // ---------- 尸体测试：生成物真跑起来 ----------
 
 test('生成物自带测试可跑且通过（写出临时目录 → node --test）', () => {
@@ -317,8 +400,8 @@ test('生成物自带测试可跑且通过（写出临时目录 → node --test�
   try {
     const r = runGeneratedTests(dir)
     assert.equal(r.status, 0, `生成物测试未通过：\n${r.stdout}\n${r.stderr}`)
-    // 防「假绿」：确认真的跑了 9 条用例，而不是被递归守卫跳过（跳过时也是 status 0）
-    assert.match(r.stdout, /# pass 9|pass 9/, `生成物测试疑似被跳过（假绿）：\n${r.stdout}`)
+    // 防「假绿」：确认真的跑了 14 条用例，而不是被递归守卫跳过（跳过时也是 status 0）
+    assert.match(r.stdout, /# pass 14|pass 14/, `生成物测试疑似被跳过（假绿）：\n${r.stdout}`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -363,6 +446,34 @@ test('尸体测试：把内部路径导入写进 src → 生成物的「组合�
     const r = runGeneratedTests(dir)
     assert.notEqual(r.status, 0, `内部路径导入必须被生成物守卫抓到\nstatus=${r.status}\n${r.stdout}\n${r.stderr}`)
     assert.match(r.stdout + r.stderr, /内部路径/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('尸体测试：把 manifest 的 capability 改成后续候选（sessions.read）→ Fabric 守卫必须变红', () => {
+  const dir = materialize(SPEC)
+  try {
+    const p = join(dir, 'dsh-plugin.json')
+    const m = JSON.parse(readFileSync(p, 'utf8'))
+    m.capabilities.required['sessions.read'] = '>=0.1.0 <0.2.0'   // RFC §7.3：属「后续设计」，不是 v0.1
+    writeFileSync(p, JSON.stringify(m, null, 2) + '\n', 'utf8')
+    const r = runGeneratedTests(dir)
+    assert.notEqual(r.status, 0, `非 v0.1 capability 必须被抓到\nstatus=${r.status}\n${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout + r.stderr, /capability 不在 v0.1 白名单|白名单/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('尸体测试：把 @deepseek-ai import 塞进 src/fabric.ts → Fabric entrypoint 守卫必须变红', () => {
+  const dir = materialize(SPEC)
+  try {
+    const p = join(dir, 'src', 'fabric.ts')
+    writeFileSync(p, "import type { Context } from '@deepseek-ai/cordis'\n" + readFileSync(p, 'utf8'), 'utf8')
+    const r = runGeneratedTests(dir)
+    assert.notEqual(r.status, 0, `Fabric entrypoint 依赖 DSH/Cordis 必须被抓到（RFC §7.1）\nstatus=${r.status}\n${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout + r.stderr, /不得 import @deepseek-ai/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

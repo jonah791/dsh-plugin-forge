@@ -1,9 +1,10 @@
 # 语义文档：插件创建器（plugin forge）
 
-> 版本 v0.2 · 2026-09-20 · 作者：爱丽丝 · 状态：**draft**
+> 版本 v0.3 · 2026-09-20 · 作者：爱丽丝 · 状态：**draft**
 > 开发方式：补课式回填（实现已存在，语义文档事后对齐；后续改动用实践回修）
 > 实现落点：`self-plugins/dsh-plugin-forge/src/index.ts`（单文件，含生成器纯函数 + 工具注册）
-> v0.2 主题：**把《DSH 插件生态倡议书》三条原则落成可机械验证的闸门**（见 §4.5 / §5.1 / §9）
+> v0.2 主题：把《DSH 插件生态倡议书》三条原则落成可机械验证的闸门（见 §4.5 / §5 / §9）
+> v0.3 主题：**生成物直接对齐 DSH Community Fabric（RFC 0001 v0.1 Draft）**——产出 `dsh-plugin.json` + 不依赖 Cordis 的 host entrypoint，并把 RFC 明文规则落成生成器闸门与生成物守卫（见 §4.6 / §9）
 
 | 项 | 值 |
 |----|----|
@@ -96,6 +97,8 @@
 | `docs/semantic.md` | `buildSemanticDoc` | 10 节骨架 + 每节 TODO，状态 `draft` |
 | `tests/smoke.test.mjs` | `buildSmokeTest` | **9 条**生成物自测：结构 5 + 生态契约守卫 4（inject 覆盖 / 无内部路径导入 / `dshForge` 与源码同源 / 能力边界与 `.gitignore`） |
 | `.gitignore` | `buildGitignore` | `node_modules/` · `lib/` · `*.log` · `data/` · `.dsh/` · `*.bak*` |
+| `dsh-plugin.json` | `buildFabricManifest` | **Fabric manifest（v0.3）**：`$schema`（自证 draft 的 `.invalid` 占位）· `manifestVersion: 0.1.0` · `id`（反向 DNS）· `name` · `version` · `apiVersion: >=0.1.0 <0.2.0` · `entrypoints.host: lib/fabric.js` · `capabilities.{required,optional}`（值为版本范围）· `subscriptions` · `contributes.commands` |
+| `src/fabric.ts` | `buildFabricEntrypoint` | **Fabric host entrypoint 骨架（v0.3）**：默认导出 `activate(ctx)` + `deactivate()`（幂等），**不依赖 DSH/Cordis**；显式声明「现在不可运行（无 SDK/schema/runtime）」 |
 
 **生态闸门（v0.2 · 倡议书三条原则的机械化）**
 
@@ -192,7 +195,18 @@
 | A23 | 双平台测试一致 | Windows `ℹ pass 34 / fail 0` · WSL `# pass 34 / fail 0` | **已实测**（2026-09-20） |
 | A24 | 自证轨迹真的落盘 | `tail -1 <DSH_HOME>/plugin-forge-trace.jsonl` → 2026-09-20 重启后真调实测行：`{"atMs":1789873526823,"name":"dsh-forge-smoke","ok":true,"built":true,"files":[…8 项…],"notes":[…2 条…],"buildOutput":"[已最小补齐 node_modules（typescript + @types/*；未链 @deepseek-ai，解析仍走共享根）] "}` | **已实测**（2026-09-20 线上） |
 | A25 | 旧版整目录 junction 会被迁移清理 | —— | **不可达（当前路径）**：`execute` 先写目录再 `prepareBuildEnv`，而 I1 保证该目录此前不存在 ⇒ `node_modules` 必然不存在，分支 ①②（清理旧 junction / 保留真实 node_modules）**进不去**，故**不宣称已验收**。保留为防御性分支，待 `--force` 重生成落地才可达（U8） |
-| A26 | 线上真调：8 件产物 + 依赖只链两样 | 真实 `plugin_forge` 调用后：顶层含 `.gitignore`/`cordis.patch.yml`/`package.json`/`README.md`/`tsconfig.json`/`docs`/`src`/`tests`；`node_modules` 内容 = **仅 `@types, typescript`**；`Test-Path node_modules/@deepseek-ai` = **False**；`lib/index.js` 产出；`notes[]` 2 条（补 `llm` / 未用 `subprocess`） | **已实测**（2026-09-20 线上） |
+| A26 | 线上真调：产物齐备 + 依赖只链两样 | 真实 `plugin_forge` 调用后：顶层含 `.gitignore`/`cordis.patch.yml`/`package.json`/`README.md`/`tsconfig.json`/`docs`/`src`/`tests`；`node_modules` 内容 = **仅 `@types, typescript`**；`Test-Path node_modules/@deepseek-ai` = **False**；`lib/index.js` 产出；`notes[]` 2 条（补 `llm` / 未用 `subprocess`） | **已实测**（2026-09-20 线上，当时 8 件 ⇒ v0.3 起 10 件，见 A32） |
+
+**v0.3.0（2026-09-20·Fabric 对齐）新增验收**
+
+| # | 可证伪命题 | 证据（命令 / 单测名 / 产物） | 状态 |
+|---|-----------|------------------------------|------|
+| A27 | 生成物带 RFC 0001 §7.1 冻结形状的 `dsh-plugin.json` | 单测 `buildFabricManifest: §7.1 冻结形状逐字段`；`buildFiles` 产出清单 = **10 件**（含 `dsh-plugin.json` + `src/fabric.ts`） | **已实测** |
+| A28 | Fabric 契约闸门在**写盘前**拒绝违规声明 | 单测 `validateFabricSpec: 拒绝路径`（`sessions.read`/`net.http`/`provides.*`/`requires.services`/非 v0.1 事件名/command 越命名空间/非法 id）+ `normalizeSpec: Fabric 契约闸门` | **已实测** |
+| A29 | Fabric entrypoint **不依赖 DSH/Cordis** | 单测（剔除注释后断言无 `@deepseek-ai/`、无 `cordis`）+ 生成物守卫同断言 + **尸体测试**（往 `src/fabric.ts` 塞 import ⇒ 生成物转红） | **已实测** |
+| A30 | 措辞禁令已落进产物（Draft ≠ 认证 ≠ 沙箱） | 生成物守卫 `能力边界与措辞禁令已声明`：README 必含「不构成安全沙箱」「不是认证」「非标准」 | **已实测** |
+| A31 | `$schema` 版本段与 `manifestVersion` 一致 | 生成物守卫 `$schema 版本段与 manifestVersion 一致`（RFC §7.1：不得成为第二协商轴） | **已实测** |
+| A32 | 线上真调产出 10 件且自测 14/14 | 真实 `plugin_forge` 调用 → `files[]` 10 项 + 目录内 `node --test tests/smoke.test.mjs` → `pass 14 / fail 0` | **待线上验收**（需重启后真调） |
 
 **生效判据（S7）**：改动 `src/index.ts` 后，按序取证——
 ① **产物新**：`lib/index.js` 的 mtime **晚于** web 进程启动时间（仅此一条不足，见 AGENTS.md §5.11 §6）；
@@ -244,6 +258,19 @@
   - **实测踩坑（Windows 链路，已写进代码注释与 README）**：`junction` 里套 pnpm 的**相对 symlink** 会解析失败——`readdirSync` 列得出 `@types/node`，但 Node 的 `existsSync`/`stat` 找不到（`.NET` 的 `Test-Path` 却报 true，**两套读数分歧**），tsc 报 `TS2688: Cannot find type definition file for 'node'`，而 `realpathSync` 能解析。故 `linkReal` 先 realpath、`@types` **逐条目**链、链完再做一次**验证探测**。
   - **教训**：给生成器加「原则」时，原则必须先变成**产物里的守卫**（生成物自测）才算落地——写在 README 里的原则会随产物一起漂走，写在生成物测试里的原则每次都重跑。本条也是这一版的真实收益：新插件的「声明一致 / 不导入内部路径 / 能力边界诚实」从**每次靠人记得**变成**生成即满足**。
 
+- **2026-09-20 v0.3.0：生成物直接对齐 DSH Community Fabric（RFC 0001 v0.1 Draft）**
+  - 触发：主人给 Fabric README 并明确「**我需要的是之后生成的插件直接符合Fabric标准**」，随后追加「这些文档都读一下」（11 份）。
+  - **读全 11 份**：`dsh-community-fabric/README.zh.md`、RFC 0001/0002/0003/0004、`docs/architecture/compatibility-layer.zh.md`、`docs/research/{community-issue-23-review, mature-plugin-frameworks, vscode-extension-model, dsh-plugin-needs}.zh.md`、`docs/plugin-development.md`、`docs/plugin-ecosystem{,.en}.md`（后 6 份由子代理蒸馏为约束清单，前 5 份由我逐节读）。
+  - 语义**被补充（新契约面）**：生成物新增 `dsh-plugin.json`（RFC §7.1 冻结形状：`$schema`/`manifestVersion`/`id`/`name`/`version`/`apiVersion`/`entrypoints.host`/`capabilities.{required,optional}`（**值为版本范围**）/`subscriptions`/`contributes.commands`）+ `src/fabric.ts`（host entrypoint 骨架，**不依赖 DSH/Cordis**）；产物 8 → **10 件**，生成物守卫 9 → **14 条**。spec 新增 `fabric?: {id?, capabilities?, subscriptions?, contributes?}`。
+  - 语义**被修正（我自己越界的判据，最重要的一条）**：v0.3 初稿把「订阅了事件却没申请同名 capability」写成**硬拒绝**——读 RFC 0003 §3 后推翻：它明确 `subscriptions` 只表示投递意向，**不是** capability/dependency/contribution，两类声明**不能混在一起** ⇒ 降级为**提示**（`fabricSpecNotes`）。同一个尺子也用在 `contributes.commands` ↔ `commands` capability 的耦合上（RFC §7.3 只在能力表里描述其用途，未写成 MUST）⇒ 同样只提示。**教训：把「RFC 示例里两处都写」当成「schema 层强制关联」是过度推断——判据必须有明文出处。**
+  - 语义**被修正（占位形态）**：`$schema` 占位从 `urn:…:draft…` 改为 `https://example.invalid/dsh-community-fabric/dsh-plugin.schema.v0.1.draft.json`——`.invalid`（RFC 2606 保留 TLD）自证不可解析，且与 RFC 0004 §7.2 自身的占位写法一致；并新增守卫断言 `$schema` 版本段与 `manifestVersion` 一致（RFC §7.1：不得成为第二协商轴）。
+  - 语义**被替换**：删除 `package.json` 的 `dshForge` 本地声明——真 Fabric manifest 已承担静态声明，保留两份会漂移（单一真源）。
+  - 语义**被补充（措辞禁令，写进产物）**：RFC §13 规定插件**只能**声称「通过 v0.1 plugin validation」（且该套件尚不存在），**不得**称「安全」或「官方认证」；官方 `docs/plugin-development.md` 明示 Fabric **尚不能作为依赖或发布目标** ⇒ 生成物 README 增加「**两个面，别混淆**」小节：Fabric 契约面（前瞻声明、`$schema` 是占位）+ DSH/Cordis 面（**非标准扩展路径**，`tools` 不在 v0.1 capability 表内，不得作为可移植 API、不得成为 Fabric entrypoint 的依赖）。
+  - 语义**被补充（事件值域）**：`subscriptions` 的 event 限定为 `messages.observe`（v0.1 唯一不可修改事件）或 `x-<org>.*`；RFC §7.4 明确事件名必须来自 Event Registry，实现方不得自行发明「等价」事件名。
+  - **实测（双平台）**：本插件 **43/43**（Windows `ℹ pass 43` · WSL `# pass 43`）；生成物自测 **14/14**（含 6 条 Fabric 守卫）；尸体测试 4 → **6 条**（新增：capability 越白名单 ⇒ 转红；entrypoint 依赖 `@deepseek-ai` ⇒ 转红）。
+  - **实测踩坑（判据假阳性）**：生成物 entrypoint 的**注释**里写了「不得 import `@deepseek-ai/*`」，被朴素正则当成违规 import ⇒ 判据改为**剔除注释后再判 import**（注释里提到包名不算依赖）。同一模式也修了我自己的单测。
+  - **教训**：读规范要读**全文**——v0.3 初稿有三处判断基于 RFC 0001 单篇推断，被 0002（command tree 不属 v0.1）、0003（五类声明不可混）、0004（`.invalid` 占位惯例）各改写一条。
+
 ## 10 · 未决问题
 
 > **v0.2.0（2026-09-20）对本节的一次性处置**：U1（死字段）→ **已删**；U3（无自证轨迹）→ **已实现** `<DSH_HOME>/plugin-forge-trace.jsonl`（吞错、不反噬）；U5（半写目录）→ **已实现**自清（只清本插件自建目录）；U6（缺 `.gitignore`）→ **已生成**（`docs/semantics/registry.json` 登记仍保留人工——跨仓库写入不该由生成器代劳，理由不变）。U2/U4 已于 2026-09-14 闭环。**新增 U7**：`dshForge` 只有生成物自测在消费，尚无 Host/目录读它（RFC 0001 落地前不等于兼容契约）。
@@ -259,3 +286,8 @@
 - **U6 生成物仍无 `.gitignore` / 无 registry 登记**（本次新增登记）：`node_modules`、`lib` 是否随仓提交由生成物自行决定；`docs/semantics/registry.json`（S2 登记）仍需人工完成。倾向：生成 `.gitignore`（忽略 `node_modules`）；registry 登记保留人工——跨仓库写入不该由生成器代劳。
   → **部分闭环（2026-09-20）**：`.gitignore` 已生成（8 件之一，含 `node_modules/` 与 `lib/`）；registry 登记**仍保留人工**，理由不变。
 - **U8 `prepareBuildEnv` 的分支 ①②（清理旧 junction / 保留真实 node_modules）当前不可达**（2026-09-20 识别）：`execute` 的 I1 保证目标目录此前不存在，故 `node_modules` 必然不存在。三个选项：① 删掉这两条分支（最简，但 `--force` 重生成落地时遮蔽风险会回来）；② 抽成可注入 fs 的导出函数并补单测（可测，但要重构 `apply` 闭包）；③ **保留为防御性分支 + 显式标注不可达**（本次选择，代价已在 A25 处如实写明「不宣称已验收」）。倾向：等真要做 `--force` 重生成时一并处置——届时它立刻变成**必须可达且必须测**的路径。
+- **U9 Fabric 侧的三处「文档未定」与一处张力**（2026-09-20 识别，随 Fabric 进展处置）：
+  1. **`$schema` canonical identifier 尚无归属**（RFC §14-1）⇒ 生成物里是 `.invalid` 占位；Phase 0 发布后替换单点常量 `FABRIC_SCHEMA_PLACEHOLDER`。
+  2. **entrypoint 模块格式与执行环境未定**（RFC §14-3）⇒ `entrypoints.host` 只声明**位置**（包内 `lib/fabric.js`）；产物**不得**声称「符合入口格式」。
+  3. **`id` 语法 / 命名空间所有权未定**（RFC §7.1 / §14-2）⇒ `com.jonah791.<包名>` 只是本生成器的**约定**，不是规范结论；产物措辞避免「符合规范」。
+  - **张力（以 Draft 为准）**：研究文档 `dsh-plugin-needs §3.1` 主张「有用的 manifest」应含 publisher / face / 平台架构 / `provided` capability / 敏感 scope 等，而 RFC §7.1 明确 v0.1 **必须拒绝** `provides` ⇒ 生成器**不采纳该主张**，此处备查。另：v0.1 无已定义 permission，故 manifest **不产出 `permissions` 键**（RFC §7.1 示例亦然）。

@@ -26,11 +26,24 @@
 
 | 工具 | 用途 |
 |------|------|
-| `plugin_forge` | 从 spec 生成插件项目：`src/index.ts` + `package.json` + `tsconfig.json` + `cordis.patch.yml` + `README.md` + `docs/semantic.md` + `tests/smoke.test.mjs` + `.gitignore`（**8 件**）；生成后自动 `tsc -p tsconfig.json` 构建验证，返回 `{ok, dir, built, files[], notes[], error?, buildOutput?}` |
+| `plugin_forge` | 从 spec 生成插件项目：`src/index.ts` + `src/fabric.ts` + `package.json` + `tsconfig.json` + `cordis.patch.yml` + `README.md` + `docs/semantic.md` + `tests/smoke.test.mjs` + `.gitignore` + `dsh-plugin.json`（**10 件**）；生成后自动 `tsc -p tsconfig.json` 构建验证，返回 `{ok, dir, built, files[], notes[], error?, buildOutput?}` |
 
-spec 字段：`name`（包名，`dsh-` 前缀可省，自动补）· `description` · `inject`（默认 `["tools"]`）· `imports`（额外 import 行数组）· `config`（Config schema 字段）· `tools`（工具数组）· `build`（默认 `true`）。
+spec 字段：`name`（包名，`dsh-` 前缀可省，自动补）· `description` · `inject`（默认 `["tools"]`）· `imports`（额外 import 行数组）· `config`（Config schema 字段）· `tools`（工具数组）· `build`（默认 `true`）· `fabric`（`{id?, capabilities?{required,optional}, subscriptions?, contributes?{commands?}}`——Fabric 静态声明，缺省只写真实内容）。
 
-`notes[]` 是**声明清晰闸门**的产物：告诉调用方「哪些 service 被自动补进了 inject」「哪些声明了但其实没用到」——见下节。
+`notes[]` 是闸门结论：**声明清晰**（哪些 service 被自动补进 `inject`、哪些声明了没用）+ **Fabric 提示**（订阅与 capability 未一并声明 / 声明了 commands 但没申请 `commands` capability / 本插件含 `tools` 而它不在 v0.1 capability 表内）——见下节。
+
+## Fabric 对齐（v0.3.0 主题）
+
+生成物默认自带 **DSH Community Fabric（[RFC 0001](https://github.com/anywhere-labs/dsh-desktop/blob/master/dsh-community-fabric/docs/rfcs/0001-plugin-manifest-capabilities-events.zh.md) v0.1 Draft）** 的静态契约面：
+
+| 项 | 内容 |
+|---|---|
+| `dsh-plugin.json` | §7.1 冻结形状逐字段：`$schema` · `manifestVersion: 0.1.0` · `id`（反向 DNS，缺省 `com.jonah791.<包名>`）· `name` · `version` · `apiVersion: >=0.1.0 <0.2.0` · `entrypoints.host: lib/fabric.js` · `capabilities.{required,optional}`（**值为版本范围**）· `subscriptions` · `contributes.commands` |
+| `src/fabric.ts` → `lib/fabric.js` | host entrypoint 骨架：默认导出 `activate(ctx)` + 幂等 `deactivate()`；**不依赖 DSH/Cordis** |
+| 生成器闸门（写盘前） | capability 白名单（`commands` / `messages.observe` / `storage.local` 或 `x-org.*`）· `id` 反向 DNS 形态 · 拒绝 `provides` / `requires.services`（§7.1）· 事件名限 `messages.observe`（§7.4）· `contributes.commands.id` 必须在自身命名空间 |
+| 生成物守卫（6 条） | manifest 必填字段 · `$schema` 必须自证 draft · `$schema` 版本段 ≡ `manifestVersion` · id/capability 白名单 · subscriptions/commands 形状 · entrypoint 不依赖 DSH/Cordis |
+
+> ⚠ **Draft，不是认证**：Fabric 目前只有文档（无正式 schema、无 SDK、无 conformance 套件），RFC §14 的 canonical `$schema` identifier 尚无归属，官方 [plugin-development.md](https://github.com/anywhere-labs/dsh-desktop/blob/master/docs/plugin-development.md) 明示其**尚不能作为依赖或发布目标**。因此：`$schema` 是 `.invalid` 占位（Phase 0 发布后替换单点常量）；生成物的 README 会显式区分「Fabric 契约面（前瞻声明）」与「DSH/Cordis 面（**非标准扩展路径**）」。RFC §13 规定插件**只能**声称「通过 v0.1 plugin validation」——而该套件尚不存在，故**任何声称「已符合 Fabric 标准 / 通过认证」的说法都是不成立的**。
 
 ## 生态对齐（v0.2.0 主题）
 
