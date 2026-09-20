@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-forge",
-  "version": "0.1.0",
-  "description": "插件创建插件：声明式 spec → 完整可构建的 DSH 插件项目（src/index.ts + package.json + tsconfig + cordis.patch.yml + README）。工具 DSL 正确性由生成器保证，高自由度（inject/imports/render/任意 execute 逻辑）。",
+  "version": "0.2.0",
+  "description": "插件创建插件：声明式 spec → 完整可构建的 DSH 插件项目（8 件：src/index.ts + package.json + tsconfig + cordis.patch.yml + README + docs/semantic.md + tests/smoke.test.mjs + .gitignore）。对齐《DSH 插件生态倡议书》三条原则并落成可机械验证的闸门：声明清晰（inject 静态对账 + dshForge 静态声明）、组合优先（拒绝跨插件内部路径导入）、兼容优先（依赖准备不制造 @deepseek-ai 遮蔽）。",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

@@ -6,13 +6,14 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import {
   pluginId, sanitizeRequired, normalizeSpec, buildSource, buildPackageJson, buildTsconfig,
   buildPatch, buildReadme, buildSemanticDoc, buildSmokeTest, buildFiles,
+  collectCtxServices, resolveInject, findInternalImports, buildForgeManifest, buildGitignore, resolveUpFrom,
 } from '../lib/index.js'
 
 const SPEC = {
@@ -180,10 +181,10 @@ test('buildReadme: 退化路径——无 tools 时清单为空但结构完整', 
 
 // ---------- 模板产出清单（本次补齐的不变量） ----------
 
-test('buildFiles: 产出清单固定为 7 件（含 docs/semantic.md 与 tests/smoke.test.mjs）', () => {
+test('buildFiles: 产出清单固定为 8 件（含 docs/semantic.md、tests/smoke.test.mjs、.gitignore）', () => {
   const files = buildFiles(SPEC)
   assert.deepEqual(Object.keys(files).sort(), [
-    'README.md', 'cordis.patch.yml', 'docs/semantic.md', 'package.json',
+    '.gitignore', 'README.md', 'cordis.patch.yml', 'docs/semantic.md', 'package.json',
     'src/index.ts', 'tests/smoke.test.mjs', 'tsconfig.json',
   ])
   assert.ok(files['package.json'].includes('"test"'), '生成物必须暴露 test 脚本')
@@ -211,6 +212,104 @@ test('buildSmokeTest: 引用 spec.name 与组合行 id（不依赖构建产物�
   assert.equal(t.includes('lib/index.js'), true)
 })
 
+// ---------- 生态倡议书三条原则 → 可机械验证的闸门（v0.2.0） ----------
+
+test('collectCtxServices: 扫出 ctx.<svc>，剔除 cordis 内建成员（logger/on/effect…）', () => {
+  const body = 'ctx.logger("x"); ctx.tools.register(t); ctx.llm.call(); ctx.on("e", () => {}); ctx.effect(() => {})'
+  assert.deepEqual(collectCtxServices(body), ['llm', 'tools'])
+  assert.deepEqual(collectCtxServices('const x = ctx2.foo; ctxX.bar'), [], '不得把 ctx2/ctxX 误当 ctx')
+})
+
+test('resolveInject: 声明清晰——源码用到但未声明的 service 自动补齐（启动期抛错的根因）', () => {
+  const r = resolveInject({ name: 'dsh-a', description: 'd', inject: ['subprocess'], tools: [{ name: 't', description: 'd', execute: 'return ctx.llm.chat({})' }] })
+  assert.deepEqual(r.inject, ['subprocess', 'llm', 'tools'], '声明序在前，新补的按字母序在后')
+  assert.deepEqual(r.added, ['llm', 'tools'])
+  assert.deepEqual(r.unused, ['subprocess'])
+})
+
+test('resolveInject: 退化——无 tools 且未显式声明时不抱怨自带的 tools 缺省', () => {
+  const r = resolveInject({ name: 'dsh-a', description: 'd' })
+  assert.deepEqual(r.inject, ['tools'])
+  assert.deepEqual(r.added, [])
+  assert.deepEqual(r.unused, [], '缺省 tools 不该被当成「声明了没用」')
+})
+
+test('findInternalImports: 组合优先——别家包的内部路径命中，公开入口不误伤', () => {
+  const hit = findInternalImports([
+    "import x from 'dsh-plugin-manager/lib/registry.js'",
+    "import y from '@deepseek-ai/dsh-tools/src/index.js'",
+    "const z = require('dsh-a/dist/x.cjs')",
+  ])
+  assert.deepEqual(hit, ['@deepseek-ai/dsh-tools/src/index.js', 'dsh-a/dist/x.cjs', 'dsh-plugin-manager/lib/registry.js'])
+  assert.deepEqual(findInternalImports([
+    "import { defineTool } from '@deepseek-ai/dsh-tools'",
+    "import { join } from 'node:path'",
+    "import type { Context } from '@deepseek-ai/cordis'",
+  ]), [], '包根入口是公开面，不得被当成内部路径')
+})
+
+test('buildForgeManifest: 静态声明（本地约定）——contract/inject/contributes/capability 齐全', () => {
+  const m = buildForgeManifest(SPEC)
+  assert.equal(m.contract, 1)
+  assert.deepEqual(m.inject, ['tools'])
+  assert.deepEqual(m.contributes.tools, ['demo_ping'])
+  assert.equal(m.capability.runtime, 'trusted-in-process')
+  assert.equal(m.capability.sandbox, false, '不得把同进程插件伪装成沙箱')
+  assert.match(m.capability.note, /不构成技术强制/)
+})
+
+test('buildPackageJson: 内嵌 dshForge 静态声明且与源码 inject 同源', () => {
+  const pkg = JSON.parse(buildPackageJson(SPEC))
+  assert.ok(pkg.dshForge, '必须有 dshForge 声明')
+  const src = buildSource(SPEC)
+  const declared = JSON.parse(/export const inject = (\[[^\]]*\]) as const/.exec(src)[1])
+  assert.deepEqual(pkg.dshForge.inject, declared, '两个表示必须同源（单一真源）')
+})
+
+test('buildGitignore: 忽略 node_modules 与 lib（新插件不从「忘记忽略」起步）', () => {
+  const gi = buildGitignore()
+  assert.ok(gi.includes('node_modules/'))
+  assert.ok(gi.includes('lib/'))
+})
+
+test('resolveUpFrom: Node 解析语义显式版（注入 exists ⇒ 可离线测）', () => {
+  // 路径一律用 join 构造——字面量反斜杠会让本用例在 WSL/Linux 上假红（夹具不得依赖运行平台）
+  const farmRoot = join('work')
+  const cordis = join(farmRoot, 'node_modules', '@deepseek-ai', 'cordis')
+  const present = new Set([cordis])
+  const exists = (p) => present.has(p)
+  const from = join(farmRoot, 'self-plugins', 'dsh-x')
+  assert.equal(resolveUpFrom(from, join('@deepseek-ai', 'cordis'), exists), cordis)
+  assert.equal(resolveUpFrom(from, join('@types', 'node'), exists), null, '找不到必须返回 null，不得静默兜底')
+})
+
+test('normalizeSpec: 组合优先闸门——内部路径导入在写盘前被拒（错误串含规范与出路）', () => {
+  const r = normalizeSpec({ name: 'demo', description: 'd', imports: ["import x from 'dsh-other/lib/deep.js'"] })
+  assert.equal(r.ok, false)
+  assert.match(r.error, /组合优先违规/)
+  assert.match(r.error, /dsh-other\/lib\/deep\.js/)
+  assert.match(r.error, /公开入口/)
+  const ok = normalizeSpec({ name: 'demo', description: 'd', imports: ["import type { Context } from '@deepseek-ai/cordis'"] })
+  assert.equal(ok.ok, true, '公开入口不得被拒')
+})
+
+test('normalizeSpec: 声明清晰——notes 报告自动补齐与「声明了没用」', () => {
+  const r = normalizeSpec({ name: 'demo', description: 'd', inject: ['subprocess'], tools: [{ name: 't', description: 'd', execute: 'return ctx.llm.chat({})' }] })
+  assert.equal(r.ok, true)
+  assert.ok(r.notes.some((n) => /已自动补声明 inject: llm/.test(n)), `缺补齐说明：${JSON.stringify(r.notes)}`)
+  assert.ok(r.notes.some((n) => /声明了未使用的 service: subprocess/.test(n)), `缺未使用说明：${JSON.stringify(r.notes)}`)
+  assert.deepEqual(normalizeSpec({ name: 'demo', description: 'd' }).notes, [], '干净 spec 不得产生噪音说明')
+})
+
+test('buildReadme: 生态契约 + 能力边界两节（capability ≠ 沙箱写进产物）', () => {
+  const md = buildReadme(SPEC)
+  assert.match(md, /## 生态契约/)
+  assert.match(md, /依赖 service\*\*（`inject`）：`tools`/)
+  assert.match(md, /## 能力边界（诚实声明）/)
+  assert.match(md, /不构成安全沙箱/)
+  assert.match(md, /组合行 id：`agent-demo-tool`/)
+})
+
 // ---------- 尸体测试：生成物真跑起来 ----------
 
 test('生成物自带测试可跑且通过（写出临时目录 → node --test）', () => {
@@ -218,8 +317,8 @@ test('生成物自带测试可跑且通过（写出临时目录 → node --test�
   try {
     const r = runGeneratedTests(dir)
     assert.equal(r.status, 0, `生成物测试未通过：\n${r.stdout}\n${r.stderr}`)
-    // 防「假绿」：确认真的跑了 5 条用例，而不是被递归守卫跳过（跳过时也是 status 0）
-    assert.match(r.stdout, /# pass 5|pass 5/, `生成物测试疑似被跳过（假绿）：\n${r.stdout}`)
+    // 防「假绿」：确认真的跑了 9 条用例，而不是被递归守卫跳过（跳过时也是 status 0）
+    assert.match(r.stdout, /# pass 9|pass 9/, `生成物测试疑似被跳过（假绿）：\n${r.stdout}`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -233,6 +332,37 @@ test('尸体测试：删掉生成物的 docs/semantic.md → 生成物测试必�
     const r = runGeneratedTests(dir)
     assert.notEqual(r.status, 0, `缺 docs/semantic.md 时生成物测试必须变红——否则守卫是空的\nstatus=${r.status} error=${r.error}\n${r.stdout}\n${r.stderr}`)
     assert.match(r.stdout + r.stderr, /semantic\.md/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('尸体测试：把 inject 改空（漏声明 tools）→ 生成物的「声明清晰」守卫必须变红', () => {
+  const dir = materialize(SPEC)
+  try {
+    const srcPath = join(dir, 'src', 'index.ts')
+    const before = readFileSync(srcPath, 'utf8')
+    assert.ok(before.includes('export const inject = ["tools"] as const'), '前提：未破坏时应通过')
+    writeFileSync(srcPath, before.replace('export const inject = ["tools"] as const', 'export const inject = [] as const'), 'utf8')
+    const r = runGeneratedTests(dir)
+    assert.notEqual(r.status, 0, `inject 与源码不符时必须变红——否则守卫是空的\nstatus=${r.status}\n${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout + r.stderr, /未声明的 service|dshForge\.inject/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('尸体测试：把内部路径导入写进 src → 生成物的「组合优先」守卫必须变红', () => {
+  const dir = materialize(SPEC)
+  try {
+    const srcPath = join(dir, 'src', 'index.ts')
+    writeFileSync(srcPath, readFileSync(srcPath, 'utf8').replace(
+      "import type { Context } from '@deepseek-ai/cordis'",
+      "import type { Context } from '@deepseek-ai/cordis'\nimport { x } from 'dsh-plugin-manager/lib/registry.js'",
+    ), 'utf8')
+    const r = runGeneratedTests(dir)
+    assert.notEqual(r.status, 0, `内部路径导入必须被生成物守卫抓到\nstatus=${r.status}\n${r.stdout}\n${r.stderr}`)
+    assert.match(r.stdout + r.stderr, /内部路径/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
