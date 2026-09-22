@@ -499,7 +499,11 @@ function buildTool(t: ToolSpec): string {
     '      },',
     '      async execute(' + argsType + ') {',
     ...(names.length ? ['        const { ' + names.join(', ') + ' } = args as any'] : []),
-    '        const __raw = await (async () => {',
+    // 显式声明 unknown：用户体可能返回**字符串**（旧约定）也可能返回**对象**（新用法，两者都合法）。
+    // 不声明时 __raw 被推断成用户体的返回类型：若返回对象，下面的 `typeof __raw === 'string'` 会把它
+    // 收窄成 never ⇒ `__raw.trim()` 报 TS2339 ⇒ **每次 plugin_forge 生成的骨架出生就不通过 tsc**
+    // （2026-09-22 端到端复验首次跑出：A/B 两个骨架同样报 `Property 'trim' does not exist on type 'never'`）。
+    '        const __raw: unknown = await (async () => {',
     '          ' + t.execute.trim().replace(/\n/g, '\n          '),
     '        })()',
     // 脚本可自行返回结构化裁决（如 JSON {"ok":false,...}）——但必须**解析**后才能采纳。
