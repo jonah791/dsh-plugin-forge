@@ -219,6 +219,13 @@
 | A36 | 作者判据单一真源（审计器与回填器共用） | 单测 `isThirdPartyRepo` 5 断言（jonah791⇒false / NanmiCoder⇒true / 无 remote 时 `@scope`⇒true、`@jonah791` 与裸名⇒false）；两脚本均 `import ... from '../lib/index.js'`，无本地副本 | **已实测** |
 | A37 | 存量自研插件回填：全部过 `validateFabricSpec`，且各仓 `tsc` exit 0、自身测试仍绿 | `node scripts/backfill-fabric.mjs --dry-run` → `失败 0`；`node scripts/backfill-fabric.mjs` 后逐仓 `tsc -p tsconfig.json` + `node --test`；`node scripts/audit-ecosystem.mjs` 的「缺 dsh-plugin.json」应从 59 降到 1（只剩第三方） | **已实测**（2026-09-20）：回填 **58 成功 / 0 失败 / 1 第三方跳过**；构建 **58/58 exit 0**（其中 2 个需先修 tsconfig 绝对路径：webops TS2688、browser 指向 npx 缓存）；测试 **56 绿 / 1 无 tests / 1 红**（`dsh-agent-cluster` 红因**他人未提交的 `src/index.ts`** DSH 0.1.6 适配，非本次改动——已按 §5.14 不动）；推送 **58/58 `rev-parse == ls-remote`**（49 `main` + 9 `master`）；审计器「缺 dsh-plugin.json」**59 → 1**（仅剩第三方 `dsh-agent-teams`） |
 
+**v0.3.2（2026-09-22·产物级判据）新增验收**
+
+| ID | 声明 | 判据（可复现命令 / 断言） | 状态 |
+|----|------|--------------------------|------|
+| A38 | 生成的骨架**真的通过 `tsc`**——用户 `execute` 体返回**对象**或**字符串**都通过 | `tests/template-typecheck.test.mjs`（跑真编译器，非字符串断言）：**尸体样本** = 把 `const __raw: unknown` 还原成旧写法 ⇒ 必须报 `TS2339 … never`；好样本 ×2（对象体 / 字符串体）⇒ 必须 exit 0 | **已实测**（50 → 53/53；该文件 3 次 tsc、约 46s，是本套件最慢单项） |
+| A39 | 线上端到端：`plugin_forge` 生成 + 构建 ⇒ `built=true`（两种用户体各一次） | 真实调用两次：**修前** A（对象体）`built=false` / B（字符串体）`built=true`；**重启激活后** A/B **双 `built=true`** | **已实测**（2026-09-22 线上） |
+
 **生效判据（S7）**：改动 `src/index.ts` 后，按序取证——
 ① **产物新**：`lib/index.js` 的 mtime **晚于** web 进程启动时间（仅此一条不足，见 AGENTS.md §5.11 §6）；
 ② **进程在跑它**：web 进程启动时间 **晚于** `lib/index.js` mtime（否则线上仍是旧构建）；
@@ -294,6 +301,14 @@
 - **实测踩坑（回填器，`files` 补写）**：整文件 `JSON.stringify` 重排会为加一行淹没整个 diff ⇒ 改**保风格的最小文本插入** + 写前 `JSON.parse` 回读校验。
 - **我上一轮的滑脱（如实记录，属交付完整性缺口）**：v0.3.0 **功能已交付但版本号未同步**——`package.json` 仍 `0.2.0`、`description` 仍写「8 件」、README 徽章 `0.2.0`、README 仍把**已删除的 `dshForge`** 当现存闸门（并声称 `dshForge.capability.sandbox = false`）、测试计数「34 例 / 9 pass / 四条尸体测试」与验收「A1–A23」均为旧值。⇒ v0.3.1 一并修正（版本 `0.3.1`、描述改「10 件 + Fabric」、README 同步、`files` 收进 `dsh-plugin.json`）；**教训：升版不是只改功能，声明面（版本/描述/README/验收编号）必须同提交对账**。
 - **教训（判据的载体）**：`version` 这类「对外声明字段」一旦有**缺省值**，就存在「默认值悄悄变成假声明」的通道——缺省只应在「新建」语义下成立，回填/迁移路径必须**显式传值**。
+
+- **2026-09-22 产物级判据：生成的骨架此前「出生就不通过 tsc」（t-ef0af5ff 收尾的端到端复验跑出）**
+  - 语义**被修正（模板缺陷）**：`buildTool` 产出 `const __raw = await (async () => { <用户体> })()`——`__raw` 被推断成**用户体的返回类型**；用户体返回**对象**时，其后的 `if (typeof __raw === 'string')` 把它收窄成 `never` ⇒ `JSON.parse(__raw.trim())` 报 **TS2339**。⇒ **骨架能否编译，取决于用户在 `execute` 里返回字符串还是对象**（两者都是合法用法）。修法：`const __raw: unknown = …`（一行）。
+  - **同现场还证明一件事**：**`lib/` 被产出 ≠ 构建成功**——tsc 有类型错误也会 emit ⇒ 只能看 `built` 读数与退出码（本插件 `built=false` 当时是**诚实**的，是「lib 存在」这个旁证在骗人）。
+  - 语义**被补充（判据的层级）**：本仓此前判据全是**源码级字符串断言**（`buildSource` 的产出做字符串判定）；本次补上**产物级判据**——跑真编译器。字符串断言在结构上**看不见**这个缺陷。
+  - 判据：**50 → 53/53**；线上两次真调（对象体 / 字符串体）：**修前** `built=false / true`，**重启激活后双 `built=true`**（A39）。
+  - 代价如实记：新判据每次跑 3 次 `tsc`，单文件约 **46s**（套件最慢单项）。取舍：**多跑比漏跑便宜**——这个缺陷污染的是**每一个**生成物。
+  - 顺带一条边界：`built=false` 与「lib 存在」冲突时，正确姿势是**手动跑一次 tsc 读错误码**（`tsc exit=2` + `TS2339`），而不是相信任一侧的间接证据。
 
 ## 10 · 未决问题
 
