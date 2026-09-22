@@ -418,10 +418,13 @@ function paramsType(params: Record<string, ParamSpec>): string {
   return '{\n' + entries.join('\n') + '\n}'
 }
 
-function buildConfig(spec: ForgeSpec): { iface: string; schema: string } {
+function buildConfig(spec: ForgeSpec): { iface: string; schema: string; hasEnabled: boolean } {
   const fields = spec.config ?? {}
   const entries = Object.entries(fields)
   const all: [string, ConfigFieldSpec][] = entries.length > 0 ? entries : [['enabled', { type: 'boolean', default: true }]]
+  // 声明了 enabled 就必须在 apply() 里消费它——否则是一个「撒谎的开关」：
+  // 调用方以为置 false 关掉了，实际工具照常注册（2026-09-22 t-ef0af5ff）。
+  const hasEnabled = all.some(([k]) => k === 'enabled')
   const ifaceLines = all.map(([k, f]) => {
     const opt = f.required || f.default !== undefined ? '' : '?'
     return '  ' + k + opt + ': ' + f.type
@@ -443,6 +446,7 @@ function buildConfig(spec: ForgeSpec): { iface: string; schema: string } {
   return {
     iface: 'export interface Config {\n' + ifaceLines.join('\n') + '\n}',
     schema: 'export const Config = z.object({\n' + schemaLines.join('\n') + '\n})',
+    hasEnabled,
   }
 }
 
@@ -498,7 +502,16 @@ function buildTool(t: ToolSpec): string {
     '        const __raw = await (async () => {',
     '          ' + t.execute.trim().replace(/\n/g, '\n          '),
     '        })()',
+    // 脚本可自行返回结构化裁决（如 JSON {"ok":false,...}）——但必须**解析**后才能采纳。
+    // 旧模板的判据 `typeof __raw === 'object'` 恒假（execute 体约定返回字符串）⇒ 该分支是死代码，
+    // 脚本级的 ok:false 从不生效，失败会被报成成功（2026-09-22 t-ef0af5ff）。
     '        if (__raw && typeof __raw === \'object\' && \'ok\' in (__raw as any)) return __raw as any',
+    '        if (typeof __raw === \'string\') {',
+    '          try {',
+    '            const __parsed = JSON.parse(__raw.trim())',
+    '            if (__parsed && typeof __parsed === \'object\' && \'ok\' in __parsed) return __parsed as any',
+    '          } catch { /* 非 JSON 输出：按纯文本处理 */ }',
+    '        }',
     '        return { ok: true, text: typeof __raw === \'string\' ? __raw : JSON.stringify(__raw) } as any',
     '      },',
     '    }))',
@@ -530,6 +543,11 @@ export function buildSource(spec: ForgeSpec): string {
     config.schema,
     '',
     'export function apply(ctx: Context, config: Config): void {',
+    ...(config.hasEnabled ? [
+      '  // enabled 必须在 apply() 里被消费：显式 false 时挂载但不贡献任何工具/副作用。',
+      '  // 只认 === false（未配置/undefined 视为启用），避免把「没写」误判成「关掉」（t-ef0af5ff）。',
+      '  if (config.enabled === false) return',
+    ] : []),
     '  const logger = ctx.logger(' + JSON.stringify(id) + ')',
     toolsBlock.length > 0 ? '\n' + toolsBlock : '  // TODO: 在此实现插件逻辑',
     '}',
