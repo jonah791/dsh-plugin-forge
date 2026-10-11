@@ -89,12 +89,23 @@ export interface ForgeSpec {
 const PACKAGE_DEPS: Record<string, string> = {
   '@deepseek-ai/cordis': '^4.0.1',
   '@deepseek-ai/schemastery': '^3.18.1-rc.1',
-  '@deepseek-ai/dsh-tools': '^0.1.0-rc.6',
+  // ⚠ 必须是 `>=` 不是 `^`：`^0.1.0-rc.6` 在 semver 里**排除 0.2.x**，而宿主的兼容门会拿
+  // peerDependencies 与运行时版本比对——运行时一旦升到 `0.2.x`，该比较失败，宿主**静默**
+  // 把这一行 disable 掉（2026-10-11 事故：新 forge 出来的插件出生即不兼容、出生即不激活，
+  // 报错文本只出现在真实启动的 stderr 里，预检因短路而 PASS）。全部可用自研插件用的都是 `>=`。
+  '@deepseek-ai/dsh-tools': '>=0.1.0-rc.6',
 }
 
-/** 包名 → 行 id / export name：dsh-xxx → agent-xxx（与 plugin-manager scaffold 同约定） */
+/**
+ * 包名 → 行 id / export name：`dsh-xxx` → `agent-xxx`；**已含 `agent-` 者不再叠加**。
+ *
+ * 2026-09-26 与 plugin-manager 的 `pluginRowId` 同步修双前缀（两处是同一条约定，
+ * 见技能 alice-code-style §七偏差清单）：对不含 `agent-` 的包名结果不变，
+ * 只修正 `dsh-agent-*` 类目录被加两层前缀的缺陷。
+ */
 export function pluginId(pkg: string): string {
-  return 'agent-' + pkg.replace(/^dsh-/, '')
+  const base = pkg.replace(/^dsh-/, '')
+  return base.startsWith('agent-') ? base : 'agent-' + base
 }
 
 /**
@@ -579,6 +590,13 @@ export function buildPackageJson(spec: ForgeSpec): string {
       // 生态级可维护性缺口 S3 的根因就在模板）。配套生成 tests/smoke.test.mjs。
       test: 'node --test "tests/*.test.mjs"',
       typecheck: 'tsc -p tsconfig.json --noEmit',
+      // 2026-10-06（t-4c6ca34f）：`main` 指向 `lib/`，而 `lib/` 被 .gitignore 忽略 ⇒
+      // 从 git 或 npm 安装本包时 lib 不存在 ⇒ 空壳 / ERR_MODULE_NOT_FOUND。
+      // `prepare` 在 (a) git 依赖安装 与 (b) npm publish 前都会执行 —— 一举两得。
+      // ⚠ 故意**不**加 `|| true`：main 指向 lib，构建失败就等于包装不起来，失败该响。
+      // ⚠ 实测依据（2026-10-06）：pnpm `link:` 依赖**不触发** prepare ⇒ 对本地 profile 的
+      //   link 安装零影响（不变慢、不会因 tsc 失败阻断挂载）；而 npm 的 git 依赖**会触发**。
+      prepare: 'tsc -p tsconfig.json',
     },
   }
   return JSON.stringify(pkg, null, 2) + '\n'
@@ -795,13 +813,14 @@ export function buildSmokeTest(spec: ForgeSpec): string {
     '  return JSON.parse(m[1])',
     '}',
     '',
-    "test('package.json 可解析且暴露 build/test 脚本', () => {",
+    "test('package.json 可解析且暴露 build/test/prepare 脚本', () => {",
     "  const pkg = JSON.parse(readText('package.json'))",
     '  assert.equal(pkg.name, ' + JSON.stringify(spec.name) + ')',
     "  assert.equal(pkg.type, 'module')",
     "  assert.equal(pkg.main, 'lib/index.js')",
     "  assert.ok(pkg.scripts.build, '必须有 build 脚本')",
     "  assert.ok(pkg.scripts.test, '必须有 test 脚本（回归能力）')",
+    "  assert.ok(pkg.scripts.prepare, '必须有 prepare 脚本（否则从 git/npm 安装得到空壳：main 指向 lib 而 lib 被 gitignore）')",
     '})',
     '',
     "test('src/index.ts 暴露 name / inject / apply', () => {",
