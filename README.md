@@ -15,7 +15,7 @@
   <a href="https://github.com/jonah791/dsh-plugin-forge"><img src="https://img.shields.io/badge/version-0.3.1-blue" alt="version"></a>
   <img src="https://img.shields.io/badge/License-MIT-green" alt="license">
   <img src="https://img.shields.io/badge/TypeScript-3178C6" alt="TypeScript">
-  <img src="https://img.shields.io/badge/tests-34%20passed-brightgreen" alt="tests">
+  <img src="https://img.shields.io/badge/tests-55%20passed-brightgreen" alt="tests">
 </p>
 
 **一句话**：给一个声明式 spec（插件名/用途/inject/Config 字段/工具列表），生成一个**完整可构建**的 DSH 插件项目并当场跑 `tsc` 验证——把「手写 `defineTool` DSL」换成「填 spec」。
