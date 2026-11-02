@@ -195,7 +195,7 @@ export function isThirdPartyRepo(dir: string, pkgName: string, gitRemote: (dir: 
 
 function readGitRemote(dir: string): string | null {
   try {
-    const url = execFileSync('git', ['-C', dir, 'remote', 'get-url', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    const url = execFileSync('git', ['-C', dir, 'remote', 'get-url', 'origin'], { windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
     return url || null
   } catch {
     return null
@@ -1086,7 +1086,7 @@ export function apply(ctx: Context, config: Config): void {
     const deps = await prepareBuildEnv(dir)
     if (!deps.ok) return { ok: false, output: deps.output }
     const r = await new Promise<{ ok: boolean; output: string }>((resolve) => {
-      execFile(process.execPath, [tsc, '-p', join(dir, 'tsconfig.json')], { cwd: dir, timeout: 120000 }, (err, stdout, stderr) => {
+      execFile(process.execPath, [tsc, '-p', join(dir, 'tsconfig.json')], { windowsHide: true, cwd: dir, timeout: 120000 }, (err, stdout, stderr) => {
         if (err) resolve({ ok: false, output: (stdout || '') + (stderr || '') })
         else resolve({ ok: true, output: (stdout || stderr || '').trim() })
       })
