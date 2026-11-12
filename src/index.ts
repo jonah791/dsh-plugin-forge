@@ -1097,6 +1097,7 @@ export function apply(ctx: Context, config: Config): void {
 
   ctx.tools.register(defineTool({
     name: 'plugin_forge',
+    deferLoading: true,
     description: '插件创建插件：声明式 spec → 完整可构建的 DSH 插件项目（10 件：src/index.ts + src/fabric.ts + package.json + tsconfig + cordis.patch.yml + README + docs/semantic.md + tests/smoke.test.mjs + .gitignore + dsh-plugin.json）。生成后自动 tsc 构建验证。**Fabric（RFC 0001 v0.1 Draft）对齐**：默认产出静态 manifest `dsh-plugin.json` + 不依赖 DSH/Cordis 的 host entrypoint 骨架 `src/fabric.ts`，并在写盘前校验 capability 白名单 / 命名空间 / 必拒类别（provides、requires.services）。⚠ Fabric 目前只有文档（无正式 schema / SDK / conformance 套件，官方 plugin-development.md 明示其**尚不能作为依赖或发布目标**）⇒ manifest 的 `$schema` 是自证 draft 的 `.invalid` 占位，**不得声称已通过 Fabric 认证**。三条生态闸门：① 声明清晰——静态扫 execute 体里的 ctx.<svc> 与 spec.inject 对账并自动补齐（未声明 service 在 cordis 严格代理下启动即抛错）；② 组合优先——拒绝跨插件/宿主内部路径导入（dsh-x/lib/...）；③ 兼容优先——依赖准备绝不把 forge 的 @deepseek-ai 副本链进新插件（防遮蔽宿主 link farm）。spec 字段：name（包名，dsh- 前缀可省）、description、inject（依赖 service，默认 ["tools"]）、imports（额外 import 行数组）、config（Config schema 字段 {字段名:{type:"string|number|boolean",default?,required?}}）、tools（数组，每项 {name,description,parameters:{字段名:{type:"string|number|boolean|array|object",description?,required?}},outputSchema?,render?（v=>string 表达式）,execute（async 函数体语句）}）。生成目录在 selfPluginsDir/<name>。',
     parameters: {
       name: { type: 'string', description: '插件包名（小写 kebab，如 my-tool 或 dsh-my-tool；自动补 dsh- 前缀）', required: true },
